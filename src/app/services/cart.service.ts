@@ -1,117 +1,103 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Inject, PLATFORM_ID } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { BehaviorSubject } from 'rxjs';
+import { take } from 'rxjs/operators';
+
 import { CartItem } from '../models/cart-item';
+import { OrderDto } from '../models/order-dto';
 import { CommandeService } from './commande.service';
 import { AuthService } from './auth.service';
 import { Router } from '@angular/router';
 import { User } from '@angular/fire/auth';
-import { OrderDto } from '../models/order-dto';
-import { DatePipe } from '@angular/common';
 
-@Injectable({
-  providedIn: 'root'
-})
+@Injectable({ providedIn: 'root' })
 export class CartService {
-  // BehaviorSubject to manage cart visibility
-  private readonly cartVisibility = new BehaviorSubject<boolean>(false);
-  private cartDetails: CartItem[] = [];
-  private readonly cartDetailsSubject = new BehaviorSubject<CartItem[]>(this.cartDetails);
+  /* ---------- State ---------- */
+  readonly cartVisibility$ = new BehaviorSubject<boolean>(false);
+  readonly cartDetails$    = new BehaviorSubject<CartItem[]>([]);
 
-  // Observable for components to subscribe to
-  cartVisibility$ = this.cartVisibility.asObservable();
-  cartDetails$ = this.cartDetailsSubject.asObservable();
+  /* ---------- Public streams ---------- */
+  readonly cartVisibilityObs = this.cartVisibility$.asObservable();
+  readonly cartDetailsObs    = this.cartDetails$.asObservable();
+
+  /* ---------- Helpers ---------- */
+  private readonly isBrowser: boolean;
 
   constructor(
-    private readonly cs: CommandeService,
-    private readonly as: AuthService,
-    private readonly router: Router,
-    private readonly dp: DatePipe
+    private readonly cmdSrv: CommandeService,
+    private readonly authSrv: AuthService,
+    private readonly router : Router,
+    @Inject(PLATFORM_ID) platformId: object              // <-- NEW
   ) {
-    this.loadCart();
+    this.isBrowser = isPlatformBrowser(platformId);
+    this.restoreCart();
   }
 
-  // Load cart from localStorage on initialization
-  private loadCart() {
-    const cartData = JSON.parse(localStorage.getItem('cartDetails') ?? '[]');
-    this.cartDetails = cartData;
-    this.cartDetailsSubject.next(this.cartDetails);
+  /* ---------- Cart persistence ---------- */
+  private restoreCart(): void {
+    if (!this.isBrowser) { return; }
+    const data = localStorage.getItem('cartDetails');
+    if (data) this.cartDetails$.next(JSON.parse(data));
   }
 
-  // Method to toggle cart visibility
-  toggleCart() {
-    this.cartVisibility.next(!this.cartVisibility.value);
+  private persistCart(): void {
+    if (!this.isBrowser) { return; }
+    localStorage.setItem('cartDetails', JSON.stringify(this.cartDetails$.value));
   }
 
-  addToCart(cartitem: CartItem) {
-    const existingItem = this.cartDetails.find(cartItem => cartItem.product.id === cartitem.product.id);
-    if (existingItem) {
-      existingItem.qte += cartitem.qte;
-    } else {
-      this.cartDetails.push(cartitem);
+  /* ---------- UI helpers ---------- */
+  toggleCart(): void {
+    this.cartVisibility$.next(!this.cartVisibility$.value);
+  }
+
+  /* ---------- Cart mutations ---------- */
+  addToCart(item: CartItem): void {
+    const list = [...this.cartDetails$.value];                       // clone
+    const found = list.find(c => c.product.id === item.product.id);
+    found ? (found.qte += item.qte) : list.push(item);
+    this.cartDetails$.next(list);
+    this.persistCart();
+  }
+
+  removeItem(item: CartItem): void {
+    const list = [...this.cartDetails$.value];
+    const idx  = list.findIndex(c => c.product.id === item.product.id);
+    if (idx !== -1) {
+      list[idx].qte > 1 ? list[idx].qte-- : list.splice(idx, 1);
+      this.cartDetails$.next(list);
+      this.persistCart();
     }
-    this.cartDetailsSubject.next(this.cartDetails);
-    localStorage.setItem('cartDetails', JSON.stringify(this.cartDetails));
   }
 
-  removeItem(cartItem: CartItem) {
-    // Find the item in the cart by its product ID
-    const existingItem = this.cartDetails.find(item => item.product.id === cartItem.product.id);
-
-    if (existingItem) {
-      // If quantity is greater than 1, decrease it
-      if (existingItem.qte > 1) {
-        existingItem.qte -= 1;
-      } else {
-        // If quantity is 1, remove the item entirely
-        const index = this.cartDetails.indexOf(existingItem);
-        this.cartDetails.splice(index, 1);
-      }
-    }
-
-    // Update the BehaviorSubject with the modified cart details
-    this.cartDetailsSubject.next(this.cartDetails);
-
-    // Sync with localStorage
-    localStorage.setItem('cartDetails', JSON.stringify(this.cartDetails));
+  clearCart(): void {
+    this.cartDetails$.next([]);
+    if (this.isBrowser) localStorage.removeItem('cartDetails');
   }
 
+  /* ---------- Business helpers ---------- */
   getTotal(): number {
-    let total: number = 0;
-    for (let item of this.cartDetails) { // Use 'for...of' to iterate over array items
-      total += item.product.price * item.qte;
-    }
-    return total;
+    return this.cartDetails$.value
+      .reduce((t, it) => t + it.product.price * it.qte, 0);
   }
 
-  validerPanier() {
-    // Check if the user is authenticated
-    if (!this.as.getAuthState()) {
-      console.log("User is not authenticated. Redirecting to login page.");
-      this.router.navigate(['/login']); // Redirect to login if user is not authenticated
+  /* ---------- Checkout ---------- */
+  validerPanier(): void {
+    if (!this.authSrv.getAuthState()) {
+      this.router.navigate(['/login']);
       return;
     }
 
-    // Get the current authenticated user
-    this.as.user$.subscribe((firebaseUser: User | null) => {
-      if (firebaseUser) {
-        // Get user ID and total amount
-        const userId = firebaseUser.uid;
-        const totalAmount = this.getTotal();
+    this.authSrv.user$
+      .pipe(take(1))
+      .subscribe((firebaseUser: User | null) => {
+        if (!firebaseUser) { return; }
 
-        // Convert CartItem instances to DetailOrderDTO instances
-        const detailsDTO = this.cartDetails.map(item => new OrderDto(item.product.id, item.qte));
+        const total   = this.getTotal();
+        const details = this.cartDetails$.value
+          .map(it => new OrderDto(it.product.id, it.qte));
 
-        // Save the Commande using CommandeService
-        this.cs.addCommande(userId, totalAmount, detailsDTO);
-        console.log("Commande validated and saved successfully.");
-
-        // Clear the cart after validation
-        this.cartDetails = [];
-        this.cartDetailsSubject.next(this.cartDetails);
-        localStorage.removeItem('cartDetails');
-      }
-    });
+        this.cmdSrv.addCommande(firebaseUser.uid, total, details);
+        this.clearCart();
+      });
   }
-
-
 }

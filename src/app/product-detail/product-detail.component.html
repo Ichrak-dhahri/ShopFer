@@ -9,29 +9,29 @@
     <div class="container px-4 px-lg-5 ">
         <div class="row gx-4 gx-lg-5 align-items-center">
             <div class="col-md-5">
-                <img class="card-img-top mb-5 mb-md-0" [src]="produit?.thumbnail" alt="{{produit?.title}}" />
+                <img class="card-img-top mb-5 mb-md-0" [src]="produit.thumbnail" alt="{{produit.title}}" />
             </div>
             <div class="col-md-6" style="margin-left: 15px;">
-                <h1 class="display-5 fw-bolder">{{produit?.title}}</h1>
+                <h1 class="display-5 fw-bolder">{{produit.title}}</h1>
                 <div class="fs-5 mb-5">
                     <span><svg width="24" height="24" class="text-primary">
                         <use xlink:href="#star-solid"></use>
-                      </svg> {{produit?.rating}} </span> <!-- Original price if applicable -->
-                    <span class="price text-primary" style="margin-left: 15px;">{{produit?.price}} $</span> <!-- Display current price -->
+                      </svg> {{produit.rating}} </span> <!-- Original price if applicable -->
+                    <span class="price text-primary" style="margin-left: 15px;">{{produit.price}} $</span> <!-- Display current price -->
                 </div>
-                <p class="lead">{{produit?.description}}</p>
+                <p class="lead">{{produit.description}}</p>
                 <div class="d-flex">
-                    <input 
-                    class="form-control text-center me-3" 
-                    id="inputQuantity" 
-                    type="number" 
-                    [(ngModel)]="quantity" 
-                    [min]="1" 
-                    style="max-width: 3rem" 
+                    <input
+                    class="form-control text-center me-3"
+                    id="inputQuantity"
+                    type="number"
+                    [(ngModel)]="quantity"
+                    [min]="1"
+                    style="max-width: 3rem"
                     />
-                    <button 
-                        class="btn btn-success flex-shrink-0" 
-                        type="button"  
+                    <button
+                        class="btn btn-success flex-shrink-0"
+                        type="button"
                         (click)="addToPanier()"                   >
                         <i class="bi-cart-fill me-1"></i>
                         Add to cart
@@ -40,6 +40,6 @@
             </div>
         </div>
     </div>
-    <app-comment [productId]="productId ?? 0"></app-comment>
+    <app-comment [productId]="productId"></app-comment>
 
 </section>

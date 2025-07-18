@@ -1,23 +1,23 @@
 <div class="product-item">
-    <span class="badge bg-success position-absolute m-3">-{{produit?.discountPercentage}}%</span>
+    <span class="badge bg-success position-absolute m-3">-{{produit.discountPercentage}}%</span>
     <a href="#" class="btn-wishlist">
       <svg width="24" height="24">
         <use xlink:href="#heart"></use>
       </svg>
     </a>
     <figure>
-      <a [routerLink]="['/product/detail', produit?.id]" title="Product Title">
-        <img [src]="produit?.thumbnail" class="tab-image">
+      <a [routerLink]="['/product/detail', produit.id]" title="Product Title">
+        <img [src]="produit.thumbnail" class="tab-image">
       </a>
     </figure>
-    <h3>{{produit?.title}}</h3>
-    <span class="qty">{{produit?.stock}} Unit</span>
+    <h3>{{produit.title}}</h3>
+    <span class="qty">{{produit.stock}} Unit</span>
     <span class="rating">
       <svg width="24" height="24" class="text-primary">
         <use xlink:href="#star-solid"></use>
-      </svg> {{produit?.rating}}
+      </svg> {{produit.rating}}
     </span>
-    <span class="price">{{produit?.price}}</span>
+    <span class="price">{{produit.price}}</span>
     <div class="d-flex align-items-center justify-content-between">
       <div class="input-group product-qty">
         <span class="input-group-btn">
