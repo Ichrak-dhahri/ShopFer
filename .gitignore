@@ -40,5 +40,12 @@ testem.log
 # System files
 .DS_Store
 Thumbs.db
+
+# Ignore Karma config file
+karma.conf.js
+
+# Ignore SonarQube project configuration
 sonar-project.properties
 
+# Ignore test coverage reports
+coverage/
