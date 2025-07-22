@@ -1,21 +1,18 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterOutlet } from '@angular/router';
+import { RouterOutlet , Router  } from '@angular/router';
 import { HeaderComponent } from './header/header.component';
-import { ListProductComponent } from './list-product/list-product.component';
 import { FooterComponent } from './footer/footer.component';
-import { SignInComponent } from './sign-in/sign-in.component';
-import { SignUpComponent } from './sign-up/sign-up.component';
-import { Router } from '@angular/router';
+
 import { AuthService } from './services/auth.service';
 import { User } from './models/user';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet,HeaderComponent,ListProductComponent,FooterComponent,SignUpComponent,CommonModule,SignInComponent],
+  imports: [RouterOutlet,HeaderComponent,FooterComponent,CommonModule],
   templateUrl: './app.component.html',
- 
+
 })
 export class AppComponent implements OnInit{
   title = 'shopfer';
