@@ -31,10 +31,19 @@ pipeline {
                 // Démarrer l'application Angular en arrière-plan
                 bat 'start /B npm run start'
                 
-                // Attendre que l'application soit disponible (utiliser ping au lieu de timeout)
+                // Vérifier que l'application répond sur le port 4200
                 bat '''
-                    ping 127.0.0.1 -n 31 > nul
-                    echo Application Angular démarrée
+                    echo Attente du demarrage de l application...
+                    for /L %%i in (1,1,30) do (
+                        netstat -an | find ":4200" | find "LISTENING" >nul
+                        if !errorlevel!==0 (
+                            echo Application Angular demarree sur le port 4200
+                            goto :ready
+                        )
+                        timeout /t 2 >nul 2>&1
+                    )
+                    echo Timeout: Application non demarree
+                    :ready
                 '''
             }
         }
