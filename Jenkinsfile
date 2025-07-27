@@ -20,31 +20,32 @@ pipeline {
             }
         }
         
-        stage('Build Angular Application') {
+        stage('Build application') {
             steps {
                 bat 'call npm run build'
             }
         }
         
-        stage('Start Angular Application') {
+        stage('Start application') {
             steps {
-                // Démarrer l'application Angular en arrière-plan
-                bat 'start /B npm run start'
-                
-                // Vérifier que l'application répond sur le port 4200
-                bat '''
-                    echo Attente du demarrage de l application...
-                    for /L %%i in (1,1,30) do (
-                        netstat -an | find ":4200" | find "LISTENING" >nul
-                        if !errorlevel!==0 (
-                            echo Application Angular demarree sur le port 4200
-                            goto :ready
-                        )
-                        timeout /t 2 >nul 2>&1
-                    )
-                    echo Timeout: Application non demarree
-                    :ready
-                '''
+                script {
+                    // Démarrer l'application Angular en arrière-plan
+                    bat 'start /B npm run start'
+                    
+                    // Attendre que l'application soit disponible
+                    timeout(time: 120, unit: 'SECONDS') {
+                        waitUntil {
+                            script {
+                                def response = bat(
+                                    script: 'curl -s -o NUL -w "%%{http_code}" http://localhost:4200',
+                                    returnStatus: true
+                                )
+                                return response == 0
+                            }
+                        }
+                    }
+                    echo 'Application Angular démarrée avec succès sur http://localhost:4200'
+                }
             }
         }
         
@@ -71,7 +72,8 @@ pipeline {
                     cd robot-tests
                     robot_env\\Scripts\\robot --outputdir . ^
                                               --variable BROWSER:headlesschrome ^
-                                              --variable URL:http://localhost:4200 ^
+                                              --variable BASE_URL:http://localhost:4200 ^s
+                                              --loglevel DEBUG ^
                                               hello.robot
                 '''
             }
@@ -80,40 +82,25 @@ pipeline {
     
     post {
         always {
-            // Arrêter l'application Angular (même si le pipeline échoue)
+            // Arrêter l'application Angular
             script {
-                bat '''
-                    for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
-                    exit 0
-                '''
+                bat 'taskkill /F /IM node.exe || echo "No Node.js processes to kill"'
             }
             
-            // Publication des résultats Robot Framework seulement si les fichiers existent
-            script {
-                if (fileExists('robot-tests/output.xml')) {
-                    robot(
-                        outputPath: 'robot-tests',
-                        outputFileName: 'output.xml',
-                        reportFileName: 'report.html',
-                        logFileName: 'log.html',
-                        disableArchiveOutput: false,
-                        passThreshold: 100,
-                        unstableThreshold: 90,
-                        otherFiles: '*.png,*.jpg'
-                    )
-                } else {
-                    echo 'Aucun fichier de résultats Robot Framework trouvé'
-                }
-            }
+            // Publication des résultats Robot Framework
+            robot(
+                outputPath: 'robot-tests',
+                outputFileName: 'output.xml',
+                reportFileName: 'report.html',
+                logFileName: 'log.html',
+                disableArchiveOutput: false,
+                passThreshold: 100,
+                unstableThreshold: 90,
+                otherFiles: '*.png,*.jpg'
+            )
             
-            // Archiver les artefacts seulement s'ils existent
-            script {
-                try {
-                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', fingerprint: true, allowEmptyArchive: true
-                } catch (Exception e) {
-                    echo "Aucun artefact Robot Framework à archiver: ${e.getMessage()}"
-                }
-            }
+            // Archiver les artefacts
+            archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', fingerprint: true
         }
         
         success {
