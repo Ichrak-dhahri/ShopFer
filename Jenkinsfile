@@ -31,9 +31,9 @@ pipeline {
                 // Démarrer l'application Angular en arrière-plan
                 bat 'start /B npm run start'
                 
-                // Attendre que l'application soit disponible
+                // Attendre que l'application soit disponible (utiliser ping au lieu de timeout)
                 bat '''
-                    timeout /t 30
+                    ping 127.0.0.1 -n 31 > nul
                     echo Application Angular démarrée
                 '''
             }
@@ -71,26 +71,40 @@ pipeline {
     
     post {
         always {
-            // Arrêter l'application Angular
-            bat '''
-                for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a
-                exit 0
-            '''
+            // Arrêter l'application Angular (même si le pipeline échoue)
+            script {
+                bat '''
+                    for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
+                    exit 0
+                '''
+            }
             
-            // Publication des résultats Robot Framework
-            robot(
-                outputPath: 'robot-tests',
-                outputFileName: 'output.xml',
-                reportFileName: 'report.html',
-                logFileName: 'log.html',
-                disableArchiveOutput: false,
-                passThreshold: 100,
-                unstableThreshold: 90,
-                otherFiles: '*.png,*.jpg'
-            )
+            // Publication des résultats Robot Framework seulement si les fichiers existent
+            script {
+                if (fileExists('robot-tests/output.xml')) {
+                    robot(
+                        outputPath: 'robot-tests',
+                        outputFileName: 'output.xml',
+                        reportFileName: 'report.html',
+                        logFileName: 'log.html',
+                        disableArchiveOutput: false,
+                        passThreshold: 100,
+                        unstableThreshold: 90,
+                        otherFiles: '*.png,*.jpg'
+                    )
+                } else {
+                    echo 'Aucun fichier de résultats Robot Framework trouvé'
+                }
+            }
             
-            // Archiver les artefacts
-            archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', fingerprint: true
+            // Archiver les artefacts seulement s'ils existent
+            script {
+                try {
+                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', fingerprint: true, allowEmptyArchive: true
+                } catch (Exception e) {
+                    echo "Aucun artefact Robot Framework à archiver: ${e.getMessage()}"
+                }
+            }
         }
         
         success {
