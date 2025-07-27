@@ -20,6 +20,25 @@ pipeline {
             }
         }
         
+        stage('Build Angular Application') {
+            steps {
+                bat 'call npm run build'
+            }
+        }
+        
+        stage('Start Angular Application') {
+            steps {
+                // Démarrer l'application Angular en arrière-plan
+                bat 'start /B npm run start'
+                
+                // Attendre que l'application soit disponible
+                bat '''
+                    timeout /t 30
+                    echo Application Angular démarrée
+                '''
+            }
+        }
+        
         stage('Setup Robot Framework Environment') {
             steps {
                 // Créer l'environnement virtuel dans robot-tests
@@ -43,6 +62,7 @@ pipeline {
                     cd robot-tests
                     robot_env\\Scripts\\robot --outputdir . ^
                                               --variable BROWSER:headlesschrome ^
+                                              --variable URL:http://localhost:4200 ^
                                               hello.robot
                 '''
             }
@@ -51,6 +71,12 @@ pipeline {
     
     post {
         always {
+            // Arrêter l'application Angular
+            bat '''
+                for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a
+                exit 0
+            '''
+            
             // Publication des résultats Robot Framework
             robot(
                 outputPath: 'robot-tests',
