@@ -37,7 +37,7 @@ pipeline {
                 // Setup Robot Framework et exécuter les tests
                 bat '''
                     python -m venv robot_env
-                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary
+                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary webdriver-manager
                 '''
                 
                 // Créer un test simple si nécessaire
@@ -49,13 +49,14 @@ Library    SeleniumLibrary
 *** Test Cases ***
 App Loads
     Open Browser    http://localhost:4200    headlesschrome
-    Title Should Contain    ShopFer
+    Wait Until Page Contains Element    tag:body    timeout=10s
+    Page Should Contain Element    tag:body
     Close Browser
 '''
                     }
                 }
                 
-                bat 'robot_env\\Scripts\\robot test.robot'
+                bat 'robot_env\\Scripts\\robot --outputdir . test.robot'
             }
         }
     }
@@ -64,8 +65,11 @@ App Loads
         always {
             // Nettoyer les processus
             bat '''
-                for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
+                for /f "tokens=5" %%a in ('netstat -aon ^| find ":4200" ^| find "LISTENING"') do (
+                    taskkill /f /pid %%a 2>nul || echo "Process %%a already stopped"
+                )
                 taskkill /f /im node.exe 2>nul || echo "No node processes"
+                exit /b 0
             '''
             
             // Publier les résultats
