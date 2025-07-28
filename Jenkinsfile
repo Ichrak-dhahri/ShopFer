@@ -1,79 +1,99 @@
 pipeline {
     agent any
-
+    
     stages {
         stage('Clone repository') {
             steps {
                 git branch: 'main', url: 'https://github.com/Ichrak-dhahri/ShopFer.git'
             }
         }
-
+        
         stage('Install dependencies') {
             steps {
-                bat 'npm install'
+                bat 'call npm install'
             }
         }
-
+        
         stage('Run unit tests') {
             steps {
-                bat 'npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
+                bat 'call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
             }
         }
-
+        
         stage('Build Angular Application') {
             steps {
-                bat 'npm run build'
+                bat 'call npm run build'
             }
         }
-
+        
         stage('Start Angular Application') {
             steps {
+                // Démarrer l'application Angular en arrière-plan de façon plus robuste
                 bat '''
-                    echo Starting Angular App...
+                    echo Démarrage de l application Angular...
                     start "Angular App" /min cmd /c "npm run start"
+                    echo Attente du démarrage de l application...
                 '''
+                
+                // Attendre que l'application soit disponible avec une vérification
                 script {
                     def maxAttempts = 30
                     def attempt = 0
                     def appStarted = false
-
+                    
                     while (attempt < maxAttempts && !appStarted) {
-                        sleep time: 2, unit: 'SECONDS'
-                        def result = bat(script: 'netstat -an | find "4200" | find "LISTENING"', returnStatus: true)
-                        if (result == 0) {
+                        try {
+                            sleep(2)
+                            bat 'netstat -an | find "4200" | find "LISTENING"'
                             appStarted = true
                             echo "✅ Application Angular démarrée sur le port 4200"
-                        } else {
+                        } catch (Exception e) {
                             attempt++
-                            echo "⏳ Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
+                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
                         }
                     }
-
+                    
                     if (!appStarted) {
-                        error("❌ L'application Angular n'a pas démarré à temps.")
+                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
                     }
                 }
             }
         }
-
+        
         stage('Setup Robot Framework Environment') {
             steps {
-                echo "🔧 Configuration de l'environnement Robot Framework..."
+                echo "Configuration de l'environnement Robot Framework..."
+                
+                // Créer le répertoire s'il n'existe pas
                 bat '''
                     if not exist robot-tests mkdir robot-tests
-                    cd robot-tests && (
-                        if exist robot_env rmdir /s /q robot_env
-                        python -m venv robot_env
-                        robot_env\\Scripts\\python.exe -m pip install --upgrade pip
-                        robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager
-                    )
+                    cd robot-tests
                 '''
+                
+                // Créer l'environnement virtuel
+                bat '''
+                    cd robot-tests
+                    if exist robot_env rmdir /s /q robot_env
+                    python -m venv robot_env
+                '''
+                
+                // Mettre à jour pip et installer les dépendances
+                bat '''
+                    cd robot-tests
+                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip
+                    robot_env\\Scripts\\pip install robotframework
+                    robot_env\\Scripts\\pip install robotframework-seleniumlibrary
+                    robot_env\\Scripts\\pip install selenium
+                    robot_env\\Scripts\\pip install webdriver-manager
+                '''
+                
+                echo "✅ Environnement Robot Framework configuré"
             }
         }
-
+        
         stage('Verify Application Status') {
             steps {
-                echo "🔎 Vérification du statut de l'application..."
+                echo "Vérification du statut de l'application..."
                 bat '''
                     echo État des processus Node.js:
                     tasklist | find "node.exe" || echo Aucun processus Node.js trouvé
@@ -86,90 +106,45 @@ pipeline {
                 '''
             }
         }
-
+        
         stage('Run Robot Framework tests') {
             steps {
-                echo "🧪 Exécution des tests Robot Framework..."
+                echo "Exécution des tests Robot Framework..."
+                
+                // Exécuter les tests
                 bat '''
-                    cd robot-tests && robot_env\\Scripts\\robot --outputdir . ^
-                        --variable BROWSER:headlesschrome ^
-                        --variable URL:http://localhost:4200 ^
-                        --loglevel INFO ^
-                        hello.robot
+                    cd robot-tests
+                    robot_env\\Scripts\\robot --outputdir . ^
+                                              --variable BROWSER:headlesschrome ^
+                                              --variable URL:http://localhost:4200 ^
+                                              --loglevel INFO ^
+                                              hello.robot
                 '''
             }
         }
-
-        // NEW: Verify Docker before building
-        stage('Verify Docker') {
-            steps {
-                echo "🐳 Vérification de Docker..."
-                script {
-                    try {
-                        bat 'docker --version'
-                        bat 'docker info'
-                        echo "✅ Docker est disponible"
-                    } catch (Exception e) {
-                        error("❌ Docker n'est pas disponible. Veuillez démarrer Docker Desktop ou le service Docker. Erreur: ${e.getMessage()}")
-                    }
-                }
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                echo "🐳 Construction de l'image Docker..."
-                bat 'docker build -t shopferimgg .'
-            }
-        }
-
-        stage('Stop existing containers') {
-            steps {
-                echo "🛑 Arrêt des conteneurs existants..."
-                script {
-                    try {
-                        bat 'docker stop $(docker ps -q --filter "ancestor=shopferimgg") 2>nul || echo Aucun conteneur à arrêter'
-                        bat 'docker rm $(docker ps -aq --filter "ancestor=shopferimgg") 2>nul || echo Aucun conteneur à supprimer'
-                    } catch (Exception e) {
-                        echo "⚠️ Erreur lors de l'arrêt des conteneurs: ${e.getMessage()}"
-                    }
-                }
-            }
-        }
-
-        stage('Run Docker Container') {
-            steps {
-                echo "🚀 Démarrage du conteneur Docker..."
-                bat 'docker run -d -p 4201:4200 --name shopfer-container shopferimgg'
-                
-                // Verify container is running
-                script {
-                    sleep time: 5, unit: 'SECONDS'
-                    def result = bat(script: 'docker ps | find "shopfer-container"', returnStatus: true)
-                    if (result == 0) {
-                        echo "✅ Conteneur Docker démarré avec succès"
-                        echo "🌐 Application disponible sur http://localhost:4201"
-                    } else {
-                        error("❌ Le conteneur Docker n'a pas démarré correctement")
-                    }
-                }
-            }
-        }
     }
-
+    
     post {
         always {
-            echo "🧹 Nettoyage des processus..."
+            echo "Nettoyage des processus..."
+            
+            // Arrêter l'application Angular de façon plus robuste
             bat '''
                 echo Arrêt des processus Node.js sur le port 4200...
                 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
                     echo Arrêt du processus %%a
                     taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
                 )
+                
+                echo Arrêt de tous les processus npm et node...
                 taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
                 taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
+                
+                echo Nettoyage terminé
+                exit /b 0
             '''
-
+            
+            // Publication des résultats Robot Framework avec gestion d'erreur
             script {
                 try {
                     robot(
@@ -186,7 +161,8 @@ pipeline {
                     echo "⚠️ Erreur lors de la publication des résultats Robot: ${e.getMessage()}"
                 }
             }
-
+            
+            // Archiver les artefacts
             script {
                 try {
                     archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
@@ -195,42 +171,28 @@ pipeline {
                 }
             }
         }
-
+        
         success {
             echo '✅ Pipeline terminé avec succès.'
-            echo '🌐 Application Angular disponible sur http://localhost:4201 (Docker)'
         }
-
+        
         failure {
             echo '❌ Pipeline échoué.'
+            
+            // Diagnostic en cas d'échec
             bat '''
                 echo === DIAGNOSTIC ===
-                echo Docker status:
-                docker ps -a | find "shopfer" 2>nul || echo Aucun conteneur shopfer
-                echo.
-                echo Node.js processes:
+                echo État des processus Node.js:
                 tasklist | find "node.exe" || echo Aucun processus Node.js
                 echo.
-                echo Port 4200 status:
+                echo Ports en écoute:
                 netstat -an | find "4200" || echo Port 4200 non trouvé
                 echo.
-                echo Robot tests directory:
+                echo Contenu du répertoire robot-tests:
                 if exist robot-tests dir robot-tests
+                echo.
                 echo === FIN DIAGNOSTIC ===
             '''
-        }
-
-        cleanup {
-            echo "🧽 Nettoyage final..."
-            script {
-                try {
-                    // Clean up Docker containers
-                    bat 'docker stop shopfer-container 2>nul || echo Container already stopped'
-                    bat 'docker rm shopfer-container 2>nul || echo Container already removed'
-                } catch (Exception e) {
-                    echo "⚠️ Erreur lors du nettoyage Docker: ${e.getMessage()}"
-                }
-            }
         }
     }
 }
