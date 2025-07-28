@@ -1,99 +1,79 @@
 pipeline {
     agent any
-    
+
     stages {
         stage('Clone repository') {
             steps {
                 git branch: 'main', url: 'https://github.com/Ichrak-dhahri/ShopFer.git'
             }
         }
-        
+
         stage('Install dependencies') {
             steps {
-                bat 'call npm install'
+                bat 'npm install'
             }
         }
-        
+
         stage('Run unit tests') {
             steps {
-                bat 'call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
+                bat 'npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
             }
         }
-        
+
         stage('Build Angular Application') {
             steps {
-                bat 'call npm run build'
+                bat 'npm run build'
             }
         }
-        
+
         stage('Start Angular Application') {
             steps {
-                // Démarrer l'application Angular en arrière-plan de façon plus robuste
                 bat '''
-                    echo Démarrage de l application Angular...
+                    echo Starting Angular App...
                     start "Angular App" /min cmd /c "npm run start"
-                    echo Attente du démarrage de l application...
                 '''
-                
-                // Attendre que l'application soit disponible avec une vérification
                 script {
                     def maxAttempts = 30
                     def attempt = 0
                     def appStarted = false
-                    
+
                     while (attempt < maxAttempts && !appStarted) {
-                        try {
-                            sleep(2)
-                            bat 'netstat -an | find "4200" | find "LISTENING"'
+                        sleep time: 2, unit: 'SECONDS'
+                        def result = bat(script: 'netstat -an | find "4200" | find "LISTENING"', returnStatus: true)
+                        if (result == 0) {
                             appStarted = true
                             echo "✅ Application Angular démarrée sur le port 4200"
-                        } catch (Exception e) {
+                        } else {
                             attempt++
-                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
+                            echo "⏳ Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
                         }
                     }
-                    
+
                     if (!appStarted) {
-                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
+                        error("❌ L'application Angular n'a pas démarré à temps.")
                     }
                 }
             }
         }
-        
+
         stage('Setup Robot Framework Environment') {
             steps {
-                echo "Configuration de l'environnement Robot Framework..."
-                
-                // Créer le répertoire s'il n'existe pas
+                echo "🔧 Configuration de l'environnement Robot Framework..."
                 bat '''
                     if not exist robot-tests mkdir robot-tests
-                    cd robot-tests
+                    cd robot-tests && (
+                        if exist robot_env rmdir /s /q robot_env
+                        python -m venv robot_env
+                        robot_env\\Scripts\\python.exe -m pip install --upgrade pip
+                        robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager
+                    )
                 '''
-                
-                // Créer l'environnement virtuel
-                bat '''
-                    cd robot-tests
-                    if exist robot_env rmdir /s /q robot_env
-                    python -m venv robot_env
-                '''
-                
-                // Mettre à jour pip et installer les dépendances
-                bat '''
-                    cd robot-tests
-                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip
-                    robot_env\\Scripts\\pip install robotframework
-                    robot_env\\Scripts\\pip install robotframework-seleniumlibrary
-                    robot_env\\Scripts\\pip install selenium
-                    robot_env\\Scripts\\pip install webdriver-manager
-                '''
-                
-                echo "✅ Environnement Robot Framework configuré"
             }
         }
-        
+
         stage('Verify Application Status') {
             steps {
-                echo "Vérification du statut de l'application..."
+                echo "🔎 Vérification du statut de l'application..."
                 bat '''
                     echo État des processus Node.js:
                     tasklist | find "node.exe" || echo Aucun processus Node.js trouvé
@@ -106,57 +86,46 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Run Robot Framework tests') {
             steps {
-                echo "Exécution des tests Robot Framework..."
-                
-                // Exécuter les tests
+                echo "🧪 Exécution des tests Robot Framework..."
                 bat '''
-                    cd robot-tests
-                    robot_env\\Scripts\\robot --outputdir . ^
-                                              --variable BROWSER:headlesschrome ^
-                                              --variable URL:http://localhost:4200 ^
-                                              --loglevel INFO ^
-                                              hello.robot
+                    cd robot-tests && robot_env\\Scripts\\robot --outputdir . ^
+                        --variable BROWSER:headlesschrome ^
+                        --variable URL:http://localhost:4200 ^
+                        --loglevel INFO ^
+                        hello.robot
                 '''
             }
         }
-        
+
         stage('Build Docker Image') {
             steps {
                 bat 'docker build -t shopferimgg .'
             }
         }
+
         stage('Run Docker Container') {
             steps {
                 bat 'docker run -d -p 4200:4200 shopferimgg'
             }
         }
-    
     }
-    
+
     post {
         always {
-            echo "Nettoyage des processus..."
-            
-            // Arrêter l'application Angular de façon plus robuste
+            echo "🧹 Nettoyage des processus..."
             bat '''
                 echo Arrêt des processus Node.js sur le port 4200...
                 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
                     echo Arrêt du processus %%a
                     taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
                 )
-                
-                echo Arrêt de tous les processus npm et node...
                 taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
                 taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
-                
-                echo Nettoyage terminé
-                exit /b 0
             '''
-            
-            // Publication des résultats Robot Framework avec gestion d'erreur
+
             script {
                 try {
                     robot(
@@ -173,8 +142,7 @@ pipeline {
                     echo "⚠️ Erreur lors de la publication des résultats Robot: ${e.getMessage()}"
                 }
             }
-            
-            // Archiver les artefacts
+
             script {
                 try {
                     archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
@@ -183,29 +151,20 @@ pipeline {
                 }
             }
         }
-        
+
         success {
             echo '✅ Pipeline terminé avec succès.'
         }
-        
+
         failure {
             echo '❌ Pipeline échoué.'
-            
-            // Diagnostic en cas d'échec
             bat '''
                 echo === DIAGNOSTIC ===
-                echo État des processus Node.js:
                 tasklist | find "node.exe" || echo Aucun processus Node.js
-                echo.
-                echo Ports en écoute:
                 netstat -an | find "4200" || echo Port 4200 non trouvé
-                echo.
-                echo Contenu du répertoire robot-tests:
                 if exist robot-tests dir robot-tests
-                echo.
                 echo === FIN DIAGNOSTIC ===
             '''
         }
     }
-    
 }
