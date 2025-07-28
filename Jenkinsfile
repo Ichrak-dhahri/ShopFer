@@ -122,6 +122,93 @@ pipeline {
                 '''
             }
         }
+        
+        stage('Stop Angular Application for Docker Build') {
+            steps {
+                echo "Arrêt de l'application Angular avant la construction Docker..."
+                bat '''
+                    echo Arrêt des processus Node.js sur le port 4200...
+                    for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
+                        echo Arrêt du processus %%a
+                        taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
+                    )
+                    
+                    echo Arrêt de tous les processus npm et node...
+                    taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
+                    taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
+                    
+                    timeout /t 5 /nobreak
+                    echo Application Angular arrêtée
+                '''
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                echo "Construction de l'image Docker..."
+                bat 'docker build -t shopferimgg .'
+                echo "✅ Image Docker construite avec succès"
+            }
+        }
+        
+        stage('Run Docker Container') {
+            steps {
+                echo "Démarrage du conteneur Docker..."
+                
+                // Arrêter et supprimer le conteneur existant s'il existe
+                bat '''
+                    echo Nettoyage des conteneurs existants...
+                    docker stop shopfer-container 2>nul || echo Aucun conteneur à arrêter
+                    docker rm shopfer-container 2>nul || echo Aucun conteneur à supprimer
+                '''
+                
+                // Démarrer le nouveau conteneur
+                bat 'docker run -d -p 4200:4200 --name shopfer-container shopferimgg'
+                
+                // Vérifier que le conteneur fonctionne
+                script {
+                    echo "Vérification du démarrage du conteneur..."
+                    def maxAttempts = 30
+                    def attempt = 0
+                    def containerStarted = false
+                    
+                    while (attempt < maxAttempts && !containerStarted) {
+                        try {
+                            sleep(2)
+                            bat 'docker ps | find "shopfer-container"'
+                            containerStarted = true
+                            echo "✅ Conteneur Docker démarré avec succès"
+                        } catch (Exception e) {
+                            attempt++
+                            echo "Tentative ${attempt}/${maxAttempts} - Conteneur pas encore prêt..."
+                        }
+                    }
+                    
+                    if (!containerStarted) {
+                        error("❌ Le conteneur Docker n'a pas pu démarrer correctement")
+                    }
+                }
+                
+                echo "✅ Application ShopFer déployée dans le conteneur Docker sur le port 4200"
+            }
+        }
+        
+        stage('Verify Docker Deployment') {
+            steps {
+                echo "Vérification du déploiement Docker..."
+                bat '''
+                    echo === STATUT DU CONTENEUR ===
+                    docker ps --filter "name=shopfer-container"
+                    echo.
+                    echo === LOGS DU CONTENEUR ===
+                    docker logs shopfer-container --tail 20
+                    echo.
+                    echo === TEST DE CONNECTIVITÉ ===
+                    timeout /t 10 /nobreak
+                    curl -f http://localhost:4200 || echo Connexion au conteneur échouée
+                '''
+            }
+        }
     }
     
     post {
@@ -174,6 +261,7 @@ pipeline {
         
         success {
             echo '✅ Pipeline terminé avec succès.'
+            echo '🐳 Application ShopFer déployée dans Docker et accessible sur http://localhost:4200'
         }
         
         failure {
@@ -191,8 +279,26 @@ pipeline {
                 echo Contenu du répertoire robot-tests:
                 if exist robot-tests dir robot-tests
                 echo.
+                echo État des conteneurs Docker:
+                docker ps -a --filter "name=shopfer-container" || echo Aucun conteneur Docker
+                echo.
+                echo Images Docker disponibles:
+                docker images | find "shopferimgg" || echo Image shopferimgg non trouvée
                 echo === FIN DIAGNOSTIC ===
             '''
+        }
+        
+        cleanup {
+            echo "Nettoyage final..."
+            // Optionnel : arrêter le conteneur Docker à la fin
+            // Décommentez les lignes suivantes si vous voulez arrêter le conteneur après chaque build
+            /*
+            bat '''
+                echo Arrêt du conteneur Docker...
+                docker stop shopfer-container 2>nul || echo Conteneur déjà arrêté
+                docker rm shopfer-container 2>nul || echo Conteneur déjà supprimé
+            '''
+            */
         }
     }
 }
