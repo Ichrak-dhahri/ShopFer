@@ -111,30 +111,6 @@ pipeline {
             steps {
                 echo "Exécution des tests Robot Framework..."
                 
-                // Vérifier que le fichier de test existe
-                script {
-                    if (!fileExists('robot-tests/hello.robot')) {
-                        echo "⚠️ Le fichier hello.robot n'existe pas, création d'un test simple..."
-                        
-                        writeFile file: 'robot-tests/hello.robot', text: '''*** Settings ***
-Documentation    Test simple pour vérifier l'application Angular
-Library          SeleniumLibrary
-
-*** Variables ***
-\${BASE_URL}    http://localhost:4200
-\${BROWSER}     headlesschrome
-
-*** Test Cases ***
-Test Application Loading
-    [Documentation]    Vérifier que l'application se charge
-    Open Browser    \${BASE_URL}    \${BROWSER}
-    Wait Until Page Contains Element    tag:body    timeout=10s
-    Title Should Contain    ShopFer
-    Close Browser
-'''
-                    }
-                }
-                
                 // Exécuter les tests
                 bat '''
                     cd robot-tests
