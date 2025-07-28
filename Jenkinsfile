@@ -57,11 +57,11 @@ pipeline {
         
         stage('Run Robot Framework tests') {
             steps {
-                // Exécuter hello.robot depuis le répertoire robot-tests
+                // Exécuter les tests avec Firefox (changement ici)
                 bat '''
                     cd robot-tests
                     robot_env\\Scripts\\robot --outputdir . ^
-                                              --variable BROWSER:headlesschrome ^
+                                              --variable BROWSER:firefox ^
                                               --variable URL:http://localhost:4200 ^
                                               hello.robot
                 '''
