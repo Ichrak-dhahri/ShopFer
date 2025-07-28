@@ -100,15 +100,59 @@ pipeline {
             }
         }
 
+        // NEW: Verify Docker before building
+        stage('Verify Docker') {
+            steps {
+                echo "🐳 Vérification de Docker..."
+                script {
+                    try {
+                        bat 'docker --version'
+                        bat 'docker info'
+                        echo "✅ Docker est disponible"
+                    } catch (Exception e) {
+                        error("❌ Docker n'est pas disponible. Veuillez démarrer Docker Desktop ou le service Docker. Erreur: ${e.getMessage()}")
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
+                echo "🐳 Construction de l'image Docker..."
                 bat 'docker build -t shopferimgg .'
+            }
+        }
+
+        stage('Stop existing containers') {
+            steps {
+                echo "🛑 Arrêt des conteneurs existants..."
+                script {
+                    try {
+                        bat 'docker stop $(docker ps -q --filter "ancestor=shopferimgg") 2>nul || echo Aucun conteneur à arrêter'
+                        bat 'docker rm $(docker ps -aq --filter "ancestor=shopferimgg") 2>nul || echo Aucun conteneur à supprimer'
+                    } catch (Exception e) {
+                        echo "⚠️ Erreur lors de l'arrêt des conteneurs: ${e.getMessage()}"
+                    }
+                }
             }
         }
 
         stage('Run Docker Container') {
             steps {
-                bat 'docker run -d -p 4200:4200 shopferimgg'
+                echo "🚀 Démarrage du conteneur Docker..."
+                bat 'docker run -d -p 4201:4200 --name shopfer-container shopferimgg'
+                
+                // Verify container is running
+                script {
+                    sleep time: 5, unit: 'SECONDS'
+                    def result = bat(script: 'docker ps | find "shopfer-container"', returnStatus: true)
+                    if (result == 0) {
+                        echo "✅ Conteneur Docker démarré avec succès"
+                        echo "🌐 Application disponible sur http://localhost:4201"
+                    } else {
+                        error("❌ Le conteneur Docker n'a pas démarré correctement")
+                    }
+                }
             }
         }
     }
@@ -154,17 +198,39 @@ pipeline {
 
         success {
             echo '✅ Pipeline terminé avec succès.'
+            echo '🌐 Application Angular disponible sur http://localhost:4201 (Docker)'
         }
 
         failure {
             echo '❌ Pipeline échoué.'
             bat '''
                 echo === DIAGNOSTIC ===
+                echo Docker status:
+                docker ps -a | find "shopfer" 2>nul || echo Aucun conteneur shopfer
+                echo.
+                echo Node.js processes:
                 tasklist | find "node.exe" || echo Aucun processus Node.js
+                echo.
+                echo Port 4200 status:
                 netstat -an | find "4200" || echo Port 4200 non trouvé
+                echo.
+                echo Robot tests directory:
                 if exist robot-tests dir robot-tests
                 echo === FIN DIAGNOSTIC ===
             '''
+        }
+
+        cleanup {
+            echo "🧽 Nettoyage final..."
+            script {
+                try {
+                    // Clean up Docker containers
+                    bat 'docker stop shopfer-container 2>nul || echo Container already stopped'
+                    bat 'docker rm shopfer-container 2>nul || echo Container already removed'
+                } catch (Exception e) {
+                    echo "⚠️ Erreur lors du nettoyage Docker: ${e.getMessage()}"
+                }
+            }
         }
     }
 }
