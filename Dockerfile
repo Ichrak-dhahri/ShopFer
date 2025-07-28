@@ -16,7 +16,6 @@ COPY . .
 RUN npm run build
 
 # Debug: vérifier la structure générée
-RUN ls -la /app/front/
 RUN ls -la /app/front/shopfer/
 
 # Étape 2: Runtime avec Node.js pour SSR
@@ -30,8 +29,8 @@ COPY package*.json ./
 # Installer seulement les dépendances de production
 RUN npm ci --only=production && npm cache clean --force
 
-# Copier les fichiers buildés depuis l'étape précédente
-COPY --from=build /app/front ./front
+# Copier les fichiers buildés depuis l'étape précédente (correction ici)
+COPY --from=build /app/front/shopfer ./dist
 
 # Créer un utilisateur non-root pour la sécurité
 RUN addgroup -g 1001 -S nodejs
@@ -42,11 +41,11 @@ RUN chown -R angular:nodejs /app
 USER angular
 
 # Exposer le port
-EXPOSE 4000
+EXPOSE 4200
 
 # Variables d'environnement
 ENV NODE_ENV=production
-ENV PORT=4000
+ENV PORT=4200
 
 # Commande pour démarrer le serveur SSR
-CMD ["npm", "run", "serve:ssr:shopfer"]
+CMD ["node", "dist/server/server.mjs"]
