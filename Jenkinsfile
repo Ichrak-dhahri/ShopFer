@@ -26,16 +26,36 @@ pipeline {
             }
         }
         
-        stage('Start Angular Application') {
+        stage('Build Docker Image') {
             steps {
-                // Démarrer l'application Angular en arrière-plan de façon plus robuste
+                echo "Construction de l'image Docker..."
+                bat 'docker build -t shopferimgg .'
+                echo "✅ Image Docker construite avec succès"
+            }
+        }
+        
+        stage('Run Docker Container') {
+            steps {
+                echo "Démarrage du conteneur Docker..."
+                
+                // Arrêter et supprimer le conteneur existant s'il existe
                 bat '''
-                    echo Démarrage de l application Angular...
-                    start "Angular App" /min cmd /c "npm run start"
-                    echo Attente du démarrage de l application...
+                    echo Nettoyage des conteneurs existants...
+                    docker stop shopfer-container 2>nul || echo Aucun conteneur à arrêter
+                    docker rm shopfer-container 2>nul || echo Aucun conteneur à supprimer
                 '''
                 
-                // Attendre que l'application soit disponible avec une vérification
+                // Démarrer le nouveau conteneur
+                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
+                
+                echo "✅ Conteneur Docker démarré sur le port 4200"
+            }
+        }
+        
+        stage('Wait for Application to Start') {
+            steps {
+                echo "Attente du démarrage de l'application dans le conteneur..."
+                
                 script {
                     def maxAttempts = 30
                     def attempt = 0
@@ -43,10 +63,11 @@ pipeline {
                     
                     while (attempt < maxAttempts && !appStarted) {
                         try {
-                            sleep(2)
-                            bat 'netstat -an | find "4200" | find "LISTENING"'
+                            sleep(3)
+                            // Vérifier si l'application répond
+                            bat 'curl -f http://localhost:4200 || exit 1'
                             appStarted = true
-                            echo "✅ Application Angular démarrée sur le port 4200"
+                            echo "✅ Application Angular accessible via Docker sur le port 4200"
                         } catch (Exception e) {
                             attempt++
                             echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
@@ -54,7 +75,7 @@ pipeline {
                     }
                     
                     if (!appStarted) {
-                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
+                        error("❌ L'application Angular n'a pas pu démarrer dans le conteneur Docker")
                     }
                 }
             }
@@ -93,13 +114,13 @@ pipeline {
         
         stage('Verify Application Status') {
             steps {
-                echo "Vérification du statut de l'application..."
+                echo "Vérification du statut de l'application Docker..."
                 bat '''
-                    echo État des processus Node.js:
-                    tasklist | find "node.exe" || echo Aucun processus Node.js trouvé
+                    echo État du conteneur Docker:
+                    docker ps | find "shopfer-container" || echo Conteneur non trouvé
                     echo.
-                    echo Ports en écoute:
-                    netstat -an | find "4200" || echo Port 4200 non trouvé
+                    echo Logs du conteneur:
+                    docker logs shopfer-container --tail 10
                     echo.
                     echo Test de connectivité HTTP:
                     curl -f http://localhost:4200 || echo Connexion échouée
@@ -126,20 +147,21 @@ pipeline {
     
     post {
         always {
-            echo "Nettoyage des processus..."
+            echo "Nettoyage des ressources..."
             
-            // Arrêter l'application Angular de façon plus robuste
+            // Arrêter et supprimer le conteneur Docker
             bat '''
-                echo Arrêt des processus Node.js sur le port 4200...
-                for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                    echo Arrêt du processus %%a
-                    taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
-                )
-                
-                echo Arrêt de tous les processus npm et node...
+                echo Arrêt du conteneur Docker...
+                docker stop shopfer-container 2>nul || echo Conteneur déjà arrêté
+                docker rm shopfer-container 2>nul || echo Conteneur déjà supprimé
+                echo Nettoyage Docker terminé
+            '''
+            
+            // Nettoyage des processus Node.js (au cas où)
+            bat '''
+                echo Nettoyage des processus Node.js restants...
                 taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
                 taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
-                
                 echo Nettoyage terminé
                 exit /b 0
             '''
@@ -182,11 +204,14 @@ pipeline {
             // Diagnostic en cas d'échec
             bat '''
                 echo === DIAGNOSTIC ===
-                echo État des processus Node.js:
-                tasklist | find "node.exe" || echo Aucun processus Node.js
+                echo État du conteneur Docker:
+                docker ps -a | find "shopfer-container" || echo Aucun conteneur trouvé
                 echo.
-                echo Ports en écoute:
-                netstat -an | find "4200" || echo Port 4200 non trouvé
+                echo Logs du conteneur:
+                docker logs shopfer-container 2>nul || echo Pas de logs disponibles
+                echo.
+                echo Images Docker:
+                docker images | find "shopferimgg" || echo Image non trouvée
                 echo.
                 echo Contenu du répertoire robot-tests:
                 if exist robot-tests dir robot-tests
