@@ -32,6 +32,35 @@ pipeline {
             }
         }
         
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                echo "Pushing Docker image to Docker Hub..."
+                
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
+                    bat """
+                        echo Tagging Docker image...
+                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
+                        
+                        echo Logging in to Docker Hub...
+                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
+                        
+                        echo Pushing image to Docker Hub...
+                        docker push %DOCKER_HUB_USER%/shopferimgg:latest
+                        
+                        echo ✅ Image pushed successfully to Docker Hub
+                    """
+                }
+            }
+            post {
+                success {
+                    echo "✅ Docker image successfully pushed to Docker Hub as farahabbes/shopferimgg:latest"
+                }
+                failure {
+                    echo "❌ Failed to push Docker image to Docker Hub"
+                }
+            }
+        }
+        
         stage('Run Docker Container') {
             steps {
                 bat 'docker run -d -p 4200:4200 shopferimgg'
