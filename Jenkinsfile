@@ -28,13 +28,62 @@ pipeline {
         
         stage('Build Docker Image') {
             steps {
+                echo "Construction de l'image Docker..."
                 bat 'docker build -t shopferimgg .'
+                echo "✅ Image Docker créée avec succès"
+            }
+        }
+        
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                echo "Pushing Docker image to Docker Hub..."
+                
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
+                    bat """
+                        echo Tagging Docker image...
+                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
+                        
+                        echo Logging in to Docker Hub...
+                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
+                        
+                        echo Pushing image to Docker Hub...
+                        docker push %DOCKER_HUB_USER%/shopferimgg:latest
+                        
+                        echo ✅ Image pushed successfully to Docker Hub
+                    """
+                }
+            }
+            post {
+                success {
+                    echo "✅ Docker image successfully pushed to Docker Hub as farahabbes/shopferimgg:latest"
+                }
+                failure {
+                    echo "❌ Failed to push Docker image to Docker Hub"
+                }
             }
         }
         
         stage('Run Docker Container') {
             steps {
-                bat 'docker run -d -p 4200:4200 shopferimgg'
+                echo "Démarrage du conteneur Docker..."
+                
+                script {
+                    try {
+                        // Arrêter et supprimer le conteneur s'il existe déjà
+                        bat '''
+                            echo Nettoyage préalable du conteneur...
+                            docker stop shopfer-container 2>nul || echo Aucun conteneur à arrêter
+                            docker rm shopfer-container 2>nul || echo Aucun conteneur à supprimer
+                        '''
+                    } catch (Exception e) {
+                        echo "Note: Nettoyage préalable - ${e.getMessage()}"
+                    }
+                }
+                
+                // Démarrer le nouveau conteneur avec un nom
+                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
+                
+                echo "✅ Conteneur shopfer-container démarré sur le port 4200"
             }
         }
         
@@ -130,38 +179,69 @@ pipeline {
         always {
             echo "Nettoyage des ressources..."
             
-            // Arrêter et supprimer les conteneurs Docker
-            bat '''
-                echo Arrêt des conteneurs Docker shopferimgg...
-                for /f %%i in ('docker ps -q --filter ancestor=shopferimgg') do (
-                    echo Arrêt du conteneur %%i
-                    docker stop %%i
-                    docker rm %%i
-                )
-                
-                echo Nettoyage des processus Node.js restants...
-                for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                    echo Arrêt du processus %%a
-                    taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
-                )
-                
-                echo Nettoyage terminé
-                exit /b 0
-            '''
+            script {
+                try {
+                    // Arrêter et supprimer le conteneur nommé
+                    bat '''
+                        echo Arrêt et suppression du conteneur shopfer-container...
+                        docker stop shopfer-container 2>nul || echo Conteneur shopfer-container non trouvé
+                        docker rm shopfer-container 2>nul || echo Conteneur shopfer-container déjà supprimé
+                    '''
+                } catch (Exception e) {
+                    echo "⚠️ Nettoyage du conteneur principal non effectué: ${e.getMessage()}"
+                }
+            }
+            
+            script {
+                try {
+                    // Nettoyage des conteneurs orphelins (syntaxe corrigée)
+                    bat '''
+                        echo Nettoyage des conteneurs orphelins...
+                        for /F %%i in ('docker ps -q --filter "ancestor=shopferimgg" 2^>nul') do (
+                            echo Arrêt du conteneur %%i
+                            docker stop %%i 2^>nul
+                            docker rm %%i 2^>nul
+                        )
+                    '''
+                } catch (Exception e) {
+                    echo "⚠️ Nettoyage Docker non effectué (Docker peut ne pas être disponible): ${e.getMessage()}"
+                }
+            }
+            
+            script {
+                try {
+                    // Nettoyage des processus Node.js
+                    bat '''
+                        echo Nettoyage des processus Node.js restants...
+                        for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
+                            echo Arrêt du processus %%a
+                            taskkill /f /pid %%a 2^>nul || echo Processus %%a déjà arrêté
+                        )
+                        echo Nettoyage terminé
+                    '''
+                } catch (Exception e) {
+                    echo "⚠️ Nettoyage des processus non effectué: ${e.getMessage()}"
+                }
+            }
             
             // Publication des résultats Robot Framework avec gestion d'erreur
             script {
                 try {
-                    robot(
-                        outputPath: 'robot-tests',
-                        outputFileName: 'output.xml',
-                        reportFileName: 'report.html',
-                        logFileName: 'log.html',
-                        disableArchiveOutput: false,
-                        passThreshold: 80,
-                        unstableThreshold: 60,
-                        otherFiles: '*.png,*.jpg'
-                    )
+                    if (fileExists('robot-tests/output.xml')) {
+                        robot(
+                            outputPath: 'robot-tests',
+                            outputFileName: 'output.xml',
+                            reportFileName: 'report.html',
+                            logFileName: 'log.html',
+                            disableArchiveOutput: false,
+                            passThreshold: 80,
+                            unstableThreshold: 60,
+                            otherFiles: '*.png,*.jpg'
+                        )
+                        echo "✅ Résultats Robot Framework publiés"
+                    } else {
+                        echo "⚠️ Fichier output.xml non trouvé pour Robot Framework"
+                    }
                 } catch (Exception e) {
                     echo "⚠️ Erreur lors de la publication des résultats Robot: ${e.getMessage()}"
                 }
@@ -170,7 +250,12 @@ pipeline {
             // Archiver les artefacts
             script {
                 try {
-                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
+                    if (fileExists('robot-tests')) {
+                        archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
+                        echo "✅ Artefacts archivés"
+                    } else {
+                        echo "⚠️ Répertoire robot-tests non trouvé pour l'archivage"
+                    }
                 } catch (Exception e) {
                     echo "⚠️ Erreur lors de l'archivage: ${e.getMessage()}"
                 }
@@ -179,28 +264,52 @@ pipeline {
         
         success {
             echo '✅ Pipeline terminé avec succès.'
+            echo '📊 Résumé:'
+            echo '   - Tests unitaires: ✅ Réussis'
+            echo '   - Build Angular: ✅ Réussi'
+            echo '   - Image Docker: ✅ Créée et pushée'
+            echo '   - Conteneur: ✅ Démarré'
+            echo '   - Tests Robot: ✅ Exécutés'
+            echo '   - Nettoyage: ✅ Effectué'
         }
         
         failure {
             echo '❌ Pipeline échoué.'
             
             // Diagnostic en cas d'échec
-            bat '''
-                echo === DIAGNOSTIC ===
-                echo État des conteneurs Docker:
-                docker ps -a | find "shopferimgg" || echo Aucun conteneur shopferimgg
-                echo.
-                echo État des processus Node.js:
-                tasklist | find "node.exe" || echo Aucun processus Node.js
-                echo.
-                echo Ports en écoute:
-                netstat -an | find "4200" || echo Port 4200 non trouvé
-                echo.
-                echo Contenu du répertoire robot-tests:
-                if exist robot-tests dir robot-tests
-                echo.
-                echo === FIN DIAGNOSTIC ===
-            '''
+            script {
+                try {
+                    bat '''
+                        echo === DIAGNOSTIC COMPLET ===
+                        echo.
+                        echo [DOCKER] État des conteneurs:
+                        docker ps -a | find "shopfer" 2>nul || echo Aucun conteneur shopfer trouvé
+                        echo.
+                        echo [DOCKER] Images disponibles:
+                        docker images | find "shopfer" 2>nul || echo Aucune image shopfer trouvée
+                        echo.
+                        echo [SYSTÈME] État des processus Node.js:
+                        tasklist | find "node.exe" 2>nul || echo Aucun processus Node.js
+                        echo.
+                        echo [RÉSEAU] Ports en écoute:
+                        netstat -an | find "4200" 2>nul || echo Port 4200 non trouvé
+                        echo.
+                        echo [FICHIERS] Contenu du répertoire robot-tests:
+                        if exist robot-tests (
+                            dir robot-tests
+                        ) else (
+                            echo Répertoire robot-tests non trouvé
+                        )
+                        echo.
+                        echo [ESPACE DISQUE] Espace disponible:
+                        dir /-c | find "octets libres" 2>nul || echo Impossible de vérifier l'espace
+                        echo.
+                        echo === FIN DIAGNOSTIC ===
+                    '''
+                } catch (Exception e) {
+                    echo "⚠️ Erreur lors du diagnostic: ${e.getMessage()}"
+                }
+            }
         }
     }
 }
