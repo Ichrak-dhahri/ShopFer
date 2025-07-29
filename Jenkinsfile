@@ -1,12 +1,6 @@
 pipeline {
     agent any
     
-    // Ajoutez cette section pour le déclenchement automatique
-    triggers {
-        pollSCM('H/5 * * * *') // Poll toutes les 5 minutes
-        // OU utilisez un webhook GitHub (recommandé)
-    }
-    
     stages {
         stage('Clone repository') {
             steps {
