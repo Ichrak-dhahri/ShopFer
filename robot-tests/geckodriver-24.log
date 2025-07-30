@@ -1,0 +1,114 @@
+1753738871917	geckodriver	INFO	Listening on 127.0.0.1:44169
+1753738875002	mozrunner::runner	INFO	Running command: "C:\\Program Files\\Mozilla Firefox\\firefox.exe" "--marionette" "--remote-debugging-port" "44170" "--remote-allow-hosts" "localhost" "-no-remote" "-profile" "C:\\Users\\LENOVO\\AppData\\Local\\Temp\\rust_mozprofileDG0QLP"
+console.warn: services.settings: Ignoring preference override of remote settings server
+console.warn: services.settings: Allow by setting MOZ_REMOTE_SETTINGS_DEVTOOLS=1 in the environment
+Dynamically enable window occlusion 0
+1753738875435	Marionette	INFO	Marionette enabled
+1753738875572	Marionette	INFO	Listening on port 44180
+WebDriver BiDi listening on ws://127.0.0.1:44170
+Read port: 44180
+1753738875819	RemoteAgent	WARN	TLS certificate errors will be ignored for this session
+DevTools listening on ws://127.0.0.1:44170/devtools/browser/7a93472a-ac60-4dc8-94dc-bdd510cbd8f4
+console.error: services.settings: 
+  main/fingerprinting-protection-overrides Signature failed  InvalidSignatureError: Invalid content signature (main/fingerprinting-protection-overrides) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/fingerprinting-protection-overrides local data was corrupted
+console.warn: services.settings: main/fingerprinting-protection-overrides Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/query-stripping Signature failed  InvalidSignatureError: Invalid content signature (main/query-stripping) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/query-stripping local data was corrupted
+console.warn: services.settings: main/query-stripping Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/query-stripping Signature failed again InvalidSignatureError: Invalid content signature (main/query-stripping) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: (new InvalidSignatureError("Invalid content signature (main/query-stripping) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'", "resource://services-settings/RemoteSettingsClient.sys.mjs", 165))
+console.error: services.settings: 
+  main/fingerprinting-protection-overrides Signature failed again InvalidSignatureError: Invalid content signature (main/fingerprinting-protection-overrides) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: (new InvalidSignatureError("Invalid content signature (main/fingerprinting-protection-overrides) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'", "resource://services-settings/RemoteSettingsClient.sys.mjs", 165))
+console.error: services.settings: 
+  main/partitioning-exempt-urls Signature failed  InvalidSignatureError: Invalid content signature (main/partitioning-exempt-urls) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/partitioning-exempt-urls local data was corrupted
+console.warn: services.settings: main/partitioning-exempt-urls Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/partitioning-exempt-urls Signature failed again InvalidSignatureError: Invalid content signature (main/partitioning-exempt-urls) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: (new InvalidSignatureError("Invalid content signature (main/partitioning-exempt-urls) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'", "resource://services-settings/RemoteSettingsClient.sys.mjs", 165))
+1753738905515	addons.xpi	ERROR	System addon update list error SyntaxError: XMLHttpRequest.open: 'http://%(server)s/dummy-system-addons.xml' is not a valid URL.
+console.warn: LoginRecipes: "Falling back to a synchronous message for: http://localhost:4200."
+console.error: services.settings: 
+  security-state/cert-revocations Signature failed  InvalidSignatureError: Invalid content signature (security-state/cert-revocations) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+console.error: services.settings: 
+  security-state/cert-revocations local data was corrupted
+console.warn: services.settings: security-state/cert-revocations Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  security-state/cert-revocations Signature failed again InvalidSignatureError: Invalid content signature (security-state/cert-revocations) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+console.error: services.settings: 
+  Message: InvalidSignatureError: Invalid content signature (security-state/cert-revocations) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+  Stack:
+    InvalidSignatureError@resource://services-settings/RemoteSettingsClient.sys.mjs:165:5
+_validateCollectionSignature@resource://services-settings/RemoteSettingsClient.sys.mjs:1022:13
+
+console.error: services.settings: 
+  security-state/intermediates Signature failed  InvalidSignatureError: Invalid content signature (security-state/intermediates) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+console.error: services.settings: 
+  security-state/intermediates local data was corrupted
+console.warn: services.settings: security-state/intermediates Signature verified failed. Retry from scratch
+console.warn: LoginRecipes: "Falling back to a synchronous message for: http://localhost:4200."
+console.error: services.settings: 
+  security-state/intermediates Signature failed again InvalidSignatureError: Invalid content signature (security-state/intermediates) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+console.error: services.settings: 
+  Message: InvalidSignatureError: Invalid content signature (security-state/intermediates) using 'onecrl.content-signature.mozilla.org-2025-09-11-10-18-46.chain'
+  Stack:
+    InvalidSignatureError@resource://services-settings/RemoteSettingsClient.sys.mjs:165:5
+_validateCollectionSignature@resource://services-settings/RemoteSettingsClient.sys.mjs:1022:13
+
+console.error: services.settings: 
+  main/search-config-v2 Signature failed  InvalidSignatureError: Invalid content signature (main/search-config-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/search-config-v2 local data was corrupted
+console.warn: services.settings: main/search-config-v2 Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/search-config-v2 Signature failed again InvalidSignatureError: Invalid content signature (main/search-config-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  Message: InvalidSignatureError: Invalid content signature (main/search-config-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+  Stack:
+    InvalidSignatureError@resource://services-settings/RemoteSettingsClient.sys.mjs:165:5
+_validateCollectionSignature@resource://services-settings/RemoteSettingsClient.sys.mjs:1022:13
+
+console.error: services.settings: 
+  main/search-telemetry-v2 Signature failed  InvalidSignatureError: Invalid content signature (main/search-telemetry-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/search-telemetry-v2 local data was corrupted
+console.warn: services.settings: main/search-telemetry-v2 Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/search-telemetry-v2 Signature failed again InvalidSignatureError: Invalid content signature (main/search-telemetry-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  Message: InvalidSignatureError: Invalid content signature (main/search-telemetry-v2) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+  Stack:
+    InvalidSignatureError@resource://services-settings/RemoteSettingsClient.sys.mjs:165:5
+_validateCollectionSignature@resource://services-settings/RemoteSettingsClient.sys.mjs:1022:13
+
+console.error: services.settings: 
+  main/translations-models Signature failed  InvalidSignatureError: Invalid content signature (main/translations-models) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  main/translations-models local data was corrupted
+console.warn: services.settings: main/translations-models Signature verified failed. Retry from scratch
+console.error: services.settings: 
+  main/translations-models Signature failed again InvalidSignatureError: Invalid content signature (main/translations-models) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+console.error: services.settings: 
+  Message: InvalidSignatureError: Invalid content signature (main/translations-models) using 'remote-settings.content-signature.mozilla.org-2025-09-08-21-33-59.chain'
+  Stack:
+    InvalidSignatureError@resource://services-settings/RemoteSettingsClient.sys.mjs:165:5
+_validateCollectionSignature@resource://services-settings/RemoteSettingsClient.sys.mjs:1022:13
+
+1753738931858	Marionette	INFO	Stopped listening on port 44180
+Dynamically enable window occlusion 1
+console.error: services.settings: 
+  Message: StorageError: Storage error: AbortError: IndexedDB: security-state/onecrl list() IndexedDB:  execute() A request was aborted, for example through a call to IDBTransaction.abort.
+  Stack:
+    StorageError@resource://services-settings/RemoteSettingsClient.sys.mjs:153:5
+_adjustedError@resource://services-settings/RemoteSettingsClient.sys.mjs:929:14
+maybeSync@resource://services-settings/RemoteSettingsClient.sys.mjs:817:38
+observe@resource://gre/modules/AsyncShutdown.sys.mjs:569:17
+
+console.error: (new Error("IndexedDB: main/ml-inference-options getLastModified() IndexedDB:  execute() The application is shutting down", "resource://services-settings/IDBHelpers.sys.mjs", 16))
