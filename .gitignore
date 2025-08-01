@@ -251,3 +251,12 @@ robot-tests/selenium-screenshot-175.png
 
 .scannerwork/
 
+
+# === Terraform ===
+# Terraform
+terraform-aks/.terraform/
+terraform-aks/terraform.tfstate
+terraform-aks/terraform.tfstate.*
+terraform-aks/*.tfvars
+terraform-aks/crash.log
+terraform-aks/*.backup
