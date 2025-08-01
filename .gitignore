@@ -253,10 +253,10 @@ robot-tests/selenium-screenshot-175.png
 
 
 # === Terraform ===
-.terraform/
-*.tfstate
-*.tfstate.backup
-terraform.tfstate
-terraform.tfstate.backup
-.terraform.lock.hcl
+
+terraform-aks/.terraform/
+terraform-aks/terraform.tfstate
+terraform-aks/terraform.tfstate.backup
+terraform-aks/.terraform.lock.hcl
+
 
