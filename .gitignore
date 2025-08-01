@@ -250,5 +250,13 @@ robot-tests/selenium-screenshot-174.png
 robot-tests/selenium-screenshot-175.png
 
 .scannerwork/
+
+
+# === Terraform ===
 .terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfstate
+terraform.tfstate.backup
+.terraform.lock.hcl
 
