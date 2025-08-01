@@ -248,6 +248,7 @@ robot-tests/selenium-screenshot-172.png
 robot-tests/selenium-screenshot-173.png
 robot-tests/selenium-screenshot-174.png
 robot-tests/selenium-screenshot-175.png
-=======
+
 .scannerwork/
->>>>>>> a01f2cfd9fd107d05c1615ef4a49b3441aaee132
+.terraform/
+
