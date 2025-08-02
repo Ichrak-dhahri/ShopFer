@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopfer-app
+  labels:
+    app: shopfer
+    version: v1
+spec:
+  replicas: 2  # Nombre de pods à déployer
+  selector:
+    matchLabels:
+      app: shopfer
+  template:
+    metadata:
+      labels:
+        app: shopfer
+    spec:
+      containers:
+      - name: shopfer-container
+        # Remplacez 'votre-username' par votre nom d'utilisateur Docker Hub
+        image: farahabbes/shopferimgg:latest
+        ports:
+        - containerPort: 4200
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "4200"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+       

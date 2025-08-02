@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shopfer-service
+  labels:
+    app: shopfer
+spec:
+  type: LoadBalancer  # Utilise le LoadBalancer d'Azure
+  ports:
+  - port: 80          # Port externe
+    targetPort: 4200  # Port du container
+    protocol: TCP
+  selector:
+    app: shopfer
