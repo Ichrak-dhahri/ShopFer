@@ -1,239 +1,116 @@
 pipeline {
     agent any
-    
-    environment {
-        scannerHome = tool 'Sonar'
-        DOCKER_IMAGE_NAME = 'shopferimgg'
-        DOCKER_CONTAINER_NAME = 'shopfer-container'
-        APP_PORT = '4200'
-    }
-    
+
     stages {
         stage('Clone repository') {
             steps {
-                git branch: 'main', url: 'https://github.com/Ichrak-dhahri/ShopFer.git'
+                git branch: 'main', url: 'https://github.com/raed20/E-commerce-App-main'
             }
         }
 
         stage('Install dependencies') {
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'npm install'
-                    } else {
-                        bat 'npm install'
-                    }
-                }
+                bat 'call npm install'
             }
         }
 
         stage('Run unit tests') {
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'npm run test -- --karma-config karma.conf.js --watch=false --code-coverage --browsers=ChromeHeadless'
-                    } else {
-                        bat 'npm run test -- --karma-config karma.conf.js --watch=false --code-coverage --browsers=ChromeHeadless'
-                    }
-                }
+                bat 'call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
             }
         }
 
         stage('Build Angular Application') {
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'npm run build'
-                    } else {
-                        bat 'npm run build'
-                    }
-                }
-            }
-        }
-
-       
-
-        stage('Setup Robot Framework Environment') {
-            steps {
-                script {
-                    if (isUnix()) {
-                        sh '''
-                            mkdir -p robot-tests
-                            cd robot-tests
-                            rm -rf robot_env
-                            python3 -m venv robot_env
-                            source robot_env/bin/activate
-                            pip install --upgrade pip
-                            pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager
-                        '''
-                    } else {
-                        bat '''
-                            if not exist robot-tests mkdir robot-tests
-                            cd robot-tests
-                            if exist robot_env rmdir /s /q robot_env
-                            python -m venv robot_env
-                            robot_env\\Scripts\\python.exe -m pip install --upgrade pip --quiet
-                            robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager --quiet
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Create Robot Test File') {
-            steps {
-                script {
-                    // Create a basic robot test file if it doesn't exist
-                    def robotTestContent = '''*** Settings ***
-Library    SeleniumLibrary
-
-*** Variables ***
-\${URL}    http://localhost:4200
-\${BROWSER}    headlesschrome
-
-*** Test Cases ***
-Open Application
-    Open Browser    \${URL}    \${BROWSER}
-    Title Should Contain    ShopFer
-    Close Browser
-
-Basic Page Load Test
-    Open Browser    \${URL}    \${BROWSER}
-    Wait Until Page Contains Element    tag:body    timeout=10s
-    Page Should Not Contain    Error
-    Close Browser
-'''
-                    writeFile file: 'robot-tests/hello.robot', text: robotTestContent
-                }
-            }
-        }
-
-        stage('Run Robot Framework tests') {
-            steps {
-                script {
-                    if (isUnix()) {
-                        sh '''
-                            cd robot-tests
-                            source robot_env/bin/activate
-                            robot --outputdir . \\
-                                  --variable BROWSER:headlesschrome \\
-                                  --variable URL:http://localhost:4200 \\
-                                  --loglevel INFO \\
-                                  hello.robot
-                        '''
-                    } else {
-                        bat '''
-                            cd robot-tests
-                            robot_env\\Scripts\\robot --outputdir . ^
-                                                      --variable BROWSER:headlesschrome ^
-                                                      --variable URL:http://localhost:4200 ^
-                                                      --loglevel INFO ^
-                                                      hello.robot
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Run SonarQube Analysis') {
-            when {
-                expression { return env.scannerHome != null }
-            }
-            steps {
-                withSonarQubeEnv(credentialsId: 'SQube-token', installationName: 'SonarQube') {
-                    script {
-                        if (isUnix()) {
-                            sh "${scannerHome}/bin/sonar-scanner"
-                        } else {
-                            bat "${scannerHome}\\bin\\sonar-scanner.bat"
-                        }
-                    }
-                }
+                bat 'call npm run build'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    // Ensure Dockerfile exists
-                    if (!fileExists('Dockerfile')) {
-                        def dockerfileContent = '''FROM node:16-alpine
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm ci --only=production
-
-COPY dist/ ./dist/
-
-EXPOSE 4200
-
-CMD ["npx", "http-server", "dist", "-p", "4200"]
-'''
-                        writeFile file: 'Dockerfile', text: dockerfileContent
-                    }
-                    
-                    if (isUnix()) {
-                        sh "docker build -t ${DOCKER_IMAGE_NAME} ."
-                    } else {
-                        bat "docker build -t ${DOCKER_IMAGE_NAME} ."
-                    }
-                }
+                bat 'docker build -t shopferimgg .'
             }
         }
 
         stage('Push Docker Image to Docker Hub') {
-            when {
-                expression { return env.DOCKER_HUB_USER != null }
-            }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
-                    script {
-                        if (isUnix()) {
-                            sh """
-                                docker tag ${DOCKER_IMAGE_NAME} \${DOCKER_HUB_USER}/${DOCKER_IMAGE_NAME}:latest
-                                echo \${DOCKER_HUB_PASS} | docker login -u \${DOCKER_HUB_USER} --password-stdin
-                                docker push \${DOCKER_HUB_USER}/${DOCKER_IMAGE_NAME}:latest
-                            """
-                        } else {
-                            bat """
-                                docker tag ${DOCKER_IMAGE_NAME} %DOCKER_HUB_USER%/${DOCKER_IMAGE_NAME}:latest
-                                docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
-                                docker push %DOCKER_HUB_USER%/${DOCKER_IMAGE_NAME}:latest
-                            """
+                    bat """
+                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
+                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
+                        docker push %DOCKER_HUB_USER%/shopferimgg:latest
+                    """
+                }
+            }
+        }
+
+        stage('Run Docker Container') {
+            steps {
+                script {
+                    try {
+                        bat '''
+                            docker stop shopfer-container 2>nul || echo off
+                            docker rm shopfer-container 2>nul || echo off
+                        '''
+                    } catch (Exception e) {
+                        // Container cleanup failed - continue
+                    }
+                }
+
+                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
+            }
+        }
+
+        stage('Verify Application Status') {
+            steps {
+                script {
+                    def maxAttempts = 30
+                    def attempt = 0
+                    def appStarted = false
+
+                    while (attempt < maxAttempts && !appStarted) {
+                        try {
+                            sleep(2)
+                            bat 'netstat -an | find "4200" | find "LISTENING"'
+                            appStarted = true
+                        } catch (Exception e) {
+                            attempt++
+                            if (attempt % 10 == 0) {
+                                echo "Waiting for application... (${attempt}/${maxAttempts})"
+                            }
                         }
+                    }
+
+                    if (!appStarted) {
+                        error("Application failed to start within timeout")
                     }
                 }
             }
         }
 
-        stage('Deploy Docker Container') {
+        stage('Setup Robot Framework Environment') {
             steps {
-                script {
-                    // Stop and remove existing container
-                    try {
-                        if (isUnix()) {
-                            sh """
-                                docker stop ${DOCKER_CONTAINER_NAME} || true
-                                docker rm ${DOCKER_CONTAINER_NAME} || true
-                            """
-                        } else {
-                            bat """
-                                docker stop ${DOCKER_CONTAINER_NAME} 2>nul || echo Container not running
-                                docker rm ${DOCKER_CONTAINER_NAME} 2>nul || echo Container not found
-                            """
-                        }
-                    } catch (Exception e) {
-                        echo "Container cleanup completed"
-                    }
+                bat '''
+                    if not exist robot-tests mkdir robot-tests
+                    cd robot-tests
+                    if exist robot_env rmdir /s /q robot_env
+                    python -m venv robot_env
+                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip --quiet
+                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager --quiet
+                '''
+            }
+        }
 
-                    // Run new container
-                    if (isUnix()) {
-                        sh "docker run -d --name ${DOCKER_CONTAINER_NAME} -p ${APP_PORT}:${APP_PORT} ${DOCKER_IMAGE_NAME}"
-                    } else {
-                        bat "docker run -d --name ${DOCKER_CONTAINER_NAME} -p ${APP_PORT}:${APP_PORT} ${DOCKER_IMAGE_NAME}"
-                    }
-                }
+        stage('Run Robot Framework tests') {
+            steps {
+                bat '''
+                    cd robot-tests
+                    robot_env\\Scripts\\robot --outputdir . ^
+                                              --variable BROWSER:headlesschrome ^
+                                              --variable URL:http://localhost:4200 ^
+                                              --loglevel INFO ^
+                                              hello.robot
+                '''
             }
         }
     }
@@ -241,22 +118,28 @@ CMD ["npx", "http-server", "dist", "-p", "4200"]
     post {
         always {
             script {
-                // Stop application processes
+                // Container cleanup
                 try {
-                    if (isUnix()) {
-                        sh '''
-                            pkill -f "npm start" || true
-                            pkill -f "ng serve" || true
-                        '''
-                    } else {
-                        bat '''
-                            for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                                taskkill /f /pid %%a 2^>nul || echo Process already stopped
-                            )
-                        '''
-                    }
+                    bat '''
+                        docker stop shopfer-container 2>nul || echo off
+                        docker rm shopfer-container 2>nul || echo off
+                        for /F %%i in ('docker ps -q --filter "ancestor=shopferimgg" 2^>nul') do (
+                            docker stop %%i 2^>nul && docker rm %%i 2^>nul
+                        )
+                    '''
                 } catch (Exception e) {
-                    echo "Process cleanup completed"
+                    // Cleanup failed - continue
+                }
+
+                // Process cleanup
+                try {
+                    bat '''
+                        for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
+                            taskkill /f /pid %%a 2^>nul || echo off
+                        )
+                    '''
+                } catch (Exception e) {
+                    // Process cleanup failed - continue
                 }
 
                 // Publish Robot Framework results
@@ -274,7 +157,7 @@ CMD ["npx", "http-server", "dist", "-p", "4200"]
                         )
                     }
                 } catch (Exception e) {
-                    echo "Warning: Could not publish Robot Framework results: ${e.getMessage()}"
+                    echo "Warning: Could not publish Robot Framework results"
                 }
 
                 // Archive artifacts
@@ -282,43 +165,30 @@ CMD ["npx", "http-server", "dist", "-p", "4200"]
                     if (fileExists('robot-tests')) {
                         archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
                     }
-                    if (fileExists('coverage')) {
-                        archiveArtifacts artifacts: 'coverage/**/*', allowEmptyArchive: true
-                    }
                 } catch (Exception e) {
-                    echo "Warning: Could not archive artifacts: ${e.getMessage()}"
+                    echo "Warning: Could not archive artifacts"
                 }
             }
         }
 
         success {
-            echo '✅ Pipeline completed successfully!'
+            echo 'Pipeline completed successfully ✅'
         }
 
         failure {
-            echo '❌ Pipeline failed!'
-            
+            echo 'Pipeline failed ❌'
+
+            // Minimal diagnostic on failure
             script {
                 try {
-                    if (isUnix()) {
-                        sh '''
-                            echo "=== DIAGNOSTIC INFO ==="
-                            docker ps -a | grep shopfer || echo "No shopfer containers found"
-                            netstat -tulpn | grep :4200 || echo "Port 4200 not in use"
-                            ls -la robot-tests/ || echo "No robot-tests directory"
-                            if [ -f app.log ]; then echo "=== APP LOG ==="; tail -20 app.log; fi
-                        '''
-                    } else {
-                        bat '''
-                            echo === DIAGNOSTIC INFO ===
-                            docker ps -a | find "shopfer" 2>nul || echo No shopfer containers found
-                            netstat -an | find "4200" 2>nul || echo Port 4200 not found
-                            if exist robot-tests\\output.xml echo Robot test results available
-                            if exist app.log type app.log
-                        '''
-                    }
+                    bat '''
+                        echo === DIAGNOSTIC ===
+                        docker ps -a | find "shopfer" 2>nul || echo No shopfer containers
+                        netstat -an | find "4200" 2>nul || echo Port 4200 not found
+                        if exist robot-tests\\output.xml echo Robot test results available
+                    '''
                 } catch (Exception e) {
-                    echo "Diagnostic failed: ${e.getMessage()}"
+                    // Diagnostic failed - continue
                 }
             }
         }
