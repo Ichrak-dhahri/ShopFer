@@ -34,41 +34,7 @@ pipeline {
                 }
             }
         }
-        stage('Build Docker Image') {
-            steps {
-                bat 'docker build -t shopferimgg .'
-            }
-        }
-
-        stage('Push Docker Image to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
-                    bat """
-                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
-                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
-                        docker push %DOCKER_HUB_USER%/shopferimgg:latest
-                    """
-                }
-            }
-        }
-
-        stage('Run Docker Container') {
-            steps {
-                script {
-                    try {
-                        bat '''
-                            docker stop shopfer-container 2>nul || echo off
-                            docker rm shopfer-container 2>nul || echo off
-                        '''
-                    } catch (Exception e) {
-                        // Container cleanup failed - continue
-                    }
-                }
-
-                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
-            }
-        }
-
+       
         stage('Verify Application Status') {
             steps {
                 script {
@@ -121,6 +87,41 @@ pipeline {
                 '''
             }
         }
+       stage('Build Docker Image') {
+            steps {
+                bat 'docker build -t shopferimgg .'
+            }
+        }
+
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
+                    bat """
+                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
+                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
+                        docker push %DOCKER_HUB_USER%/shopferimgg:latest
+                    """
+                }
+            }
+        }
+
+        stage('Run Docker Container') {
+            steps {
+                script {
+                    try {
+                        bat '''
+                            docker stop shopfer-container 2>nul || echo off
+                            docker rm shopfer-container 2>nul || echo off
+                        '''
+                    } catch (Exception e) {
+                        // Container cleanup failed - continue
+                    }
+                }
+
+                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
+            }
+        }
+
     }
 
     post {
