@@ -1,5 +1,8 @@
 pipeline {
     agent any
+  environment {
+        scannerHome = tool 'Sonar' // Déplacé ici pour être accessible globalement
+      }
     
     stages {
         stage('Clone repository') {
@@ -60,7 +63,13 @@ pipeline {
                 bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
             }
         }
-        
+         stage('Run Sonarqube') {
+            steps {
+                withSonarQubeEnv(credentialsId: 'SQube-token', installationName: 'SonarQube') {
+                    bat "${scannerHome}\\bin\\sonar-scanner.bat"
+                }
+            }
+        }
         stage('Verify Application Status') {
             steps {
                 script {
