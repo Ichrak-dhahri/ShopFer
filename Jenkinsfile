@@ -27,13 +27,7 @@ pipeline {
                 bat 'call npm run build'
             }
         }
-            stage('Run Sonarqube') {
-            steps {
-                withSonarQubeEnv(credentialsId: 'SQube-token', installationName: 'SonarQube') {
-                    bat "${scannerHome}\\bin\\sonar-scanner.bat"
-                }
-            }
-        }
+           
        
         stage('Verify Application Status') {
             steps {
@@ -85,6 +79,13 @@ pipeline {
                                               --loglevel INFO ^
                                               hello.robot
                 '''
+            }
+        }
+       stage('Run Sonarqube') {
+            steps {
+                withSonarQubeEnv(credentialsId: 'SQube-token', installationName: 'SonarQube') {
+                    bat "${scannerHome}\\bin\\sonar-scanner.bat"
+                }
             }
         }
        stage('Build Docker Image') {
