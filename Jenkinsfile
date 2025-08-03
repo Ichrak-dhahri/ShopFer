@@ -1,37 +1,37 @@
 pipeline {
     agent any
-
+    
     stages {
         stage('Clone repository') {
             steps {
-                git branch: 'main', url: 'https://github.com/raed20/E-commerce-App-main'
+                git branch: 'main', url: 'https://github.com/Ichrak-dhahri/ShopFer.git'
             }
         }
-
+        
         stage('Install dependencies') {
             steps {
                 bat 'call npm install'
             }
         }
-
+        
         stage('Run unit tests') {
             steps {
                 bat 'call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
             }
         }
-
+        
         stage('Build Angular Application') {
             steps {
                 bat 'call npm run build'
             }
         }
-
+        
         stage('Build Docker Image') {
             steps {
                 bat 'docker build -t shopferimgg .'
             }
         }
-
+        
         stage('Push Docker Image to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
@@ -43,7 +43,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Run Docker Container') {
             steps {
                 script {
@@ -56,18 +56,18 @@ pipeline {
                         // Container cleanup failed - continue
                     }
                 }
-
+                
                 bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
             }
         }
-
+        
         stage('Verify Application Status') {
             steps {
                 script {
                     def maxAttempts = 30
                     def attempt = 0
                     def appStarted = false
-
+                    
                     while (attempt < maxAttempts && !appStarted) {
                         try {
                             sleep(2)
@@ -80,14 +80,14 @@ pipeline {
                             }
                         }
                     }
-
+                    
                     if (!appStarted) {
                         error("Application failed to start within timeout")
                     }
                 }
             }
         }
-
+        
         stage('Setup Robot Framework Environment') {
             steps {
                 bat '''
@@ -100,7 +100,7 @@ pipeline {
                 '''
             }
         }
-
+        
         stage('Run Robot Framework tests') {
             steps {
                 bat '''
@@ -114,7 +114,7 @@ pipeline {
             }
         }
     }
-
+    
     post {
         always {
             script {
@@ -130,7 +130,7 @@ pipeline {
                 } catch (Exception e) {
                     // Cleanup failed - continue
                 }
-
+                
                 // Process cleanup
                 try {
                     bat '''
@@ -141,7 +141,7 @@ pipeline {
                 } catch (Exception e) {
                     // Process cleanup failed - continue
                 }
-
+                
                 // Publish Robot Framework results
                 try {
                     if (fileExists('robot-tests/output.xml')) {
@@ -159,7 +159,7 @@ pipeline {
                 } catch (Exception e) {
                     echo "Warning: Could not publish Robot Framework results"
                 }
-
+                
                 // Archive artifacts
                 try {
                     if (fileExists('robot-tests')) {
@@ -170,14 +170,14 @@ pipeline {
                 }
             }
         }
-
+        
         success {
             echo 'Pipeline completed successfully ✅'
         }
-
+        
         failure {
             echo 'Pipeline failed ❌'
-
+            
             // Minimal diagnostic on failure
             script {
                 try {
