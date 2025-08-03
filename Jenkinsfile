@@ -51,45 +51,7 @@ pipeline {
             }
         }
 
-        stage('Start Application for Testing') {
-            steps {
-                script {
-                    // Start the application in background
-                    if (isUnix()) {
-                        sh 'nohup npm start > app.log 2>&1 &'
-                    } else {
-                        bat 'start /B npm start'
-                    }
-                    
-                    // Wait for application to start
-                    def maxAttempts = 30
-                    def attempt = 0
-                    def appStarted = false
-
-                    while (attempt < maxAttempts && !appStarted) {
-                        try {
-                            sleep(3)
-                            if (isUnix()) {
-                                sh 'curl -f http://localhost:4200 || exit 1'
-                            } else {
-                                bat 'powershell -Command "Invoke-WebRequest -Uri http://localhost:4200 -UseBasicParsing"'
-                            }
-                            appStarted = true
-                            echo "Application started successfully!"
-                        } catch (Exception e) {
-                            attempt++
-                            if (attempt % 5 == 0) {
-                                echo "Waiting for application... (${attempt}/${maxAttempts})"
-                            }
-                        }
-                    }
-
-                    if (!appStarted) {
-                        error("Application failed to start within timeout")
-                    }
-                }
-            }
-        }
+       
 
         stage('Setup Robot Framework Environment') {
             steps {
