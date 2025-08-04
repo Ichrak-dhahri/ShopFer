@@ -7,14 +7,16 @@ pipeline {
         DOCKER_IMAGE_NAME = 'farahabbes/shopferimgg'
         DOCKER_TAG = "${BUILD_NUMBER}"
         
-        // Azure credentials
+        // Azure credentials - These will be set from Jenkins credentials
         AZURE_CREDENTIALS = credentials('azure-service-principal')
         
         // Terraform variables
         TF_VAR_resource_group_name = 'rg-shopfer-aks'
         TF_VAR_cluster_name = 'aks-shopfer'
-        TF_VAR_location = 'East US'
-        TF_VAR_node_count = '2'
+        TF_VAR_location = 'francecentral'
+        TF_VAR_node_count = '1'
+        TF_VAR_kubernetes_version = '1.30.14'
+        TF_VAR_vm_size = 'Standard_B2s'
         
         // Application variables
         APP_NAMESPACE = 'shopfer-app'
@@ -87,13 +89,14 @@ pipeline {
                     )
                 '''
                 
-                // Créer les fichiers Terraform
-                writeFile file: 'terraform/main.tf', text: '''
+                // Create Terraform files with proper structure
+                writeFile file: 'terraform/providers.tf', text: '''
 terraform {
+  required_version = ">= 1.0"
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~>3.0"
+      version = "~> 3.0"
     }
   }
 }
@@ -101,70 +104,141 @@ terraform {
 provider "azurerm" {
   features {}
 }
-
-# Resource Group
-resource "azurerm_resource_group" "main" {
-  name     = var.resource_group_name
+'''
+                
+                writeFile file: 'terraform/main.tf', text: '''
+data "azurerm_kubernetes_service_versions" "current" {
   location = var.location
 }
 
-# AKS Cluster
-resource "azurerm_kubernetes_cluster" "main" {
-  name                = var.cluster_name
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  dns_prefix          = "${var.cluster_name}-dns"
-
-  default_node_pool {
-    name       = "default"
-    node_count = var.node_count
-    vm_size    = "Standard_D2_v2"
+resource "azurerm_resource_group" "aks_rg" {
+  name     = var.resource_group_name
+  location = var.location
+  
+  tags = {
+    Environment = "Dev"
+    Project     = "ShopFer"
   }
+}
 
+resource "azurerm_kubernetes_cluster" "aks" {
+  name                = var.cluster_name
+  location            = azurerm_resource_group.aks_rg.location
+  resource_group_name = azurerm_resource_group.aks_rg.name
+  dns_prefix          = "${var.cluster_name}-dns"
+  
+  # Use specified Kubernetes version
+  kubernetes_version = var.kubernetes_version
+  
+  default_node_pool {
+    name                = "default"
+    node_count         = var.node_count
+    vm_size            = var.vm_size
+    os_disk_size_gb    = 30
+    os_disk_type       = "Managed"
+    ultra_ssd_enabled  = false
+    
+    # Options pour économiser les coûts
+    enable_auto_scaling = false
+    type               = "VirtualMachineScaleSets"
+    
+    upgrade_settings {
+      max_surge = "10%"
+    }
+  }
+  
   identity {
     type = "SystemAssigned"
   }
-
+  
   network_profile {
-    network_plugin = "kubenet"
+    network_plugin    = "kubenet"
+    load_balancer_sku = "standard"
+    outbound_type     = "loadBalancer"
   }
-}
-
-output "kube_config" {
-  value     = azurerm_kubernetes_cluster.main.kube_config_raw
-  sensitive = true
-}
-
-output "cluster_name" {
-  value = azurerm_kubernetes_cluster.main.name
-}
-
-output "resource_group_name" {
-  value = azurerm_resource_group.main.name
+  
+  # Configuration pour le tier gratuit
+  sku_tier = "Free"
+  
+  # Désactiver des fonctionnalités premium pour réduire les coûts
+  role_based_access_control_enabled = true
+  run_command_enabled              = true
+  
+  tags = {
+    Environment = "Dev"
+    Project     = "ShopFer"
+  }
 }
 '''
                 
                 writeFile file: 'terraform/variables.tf', text: '''
 variable "resource_group_name" {
-  description = "Name of the resource group"
   type        = string
-}
-
-variable "cluster_name" {
-  description = "Name of the AKS cluster"
-  type        = string
+  description = "RG name in Azure"
+  default     = "rg-shopfer-aks"
 }
 
 variable "location" {
-  description = "Azure region"
   type        = string
-  default     = "East US"
+  description = "Resources location in Azure"
+  default     = "francecentral"
+}
+
+variable "cluster_name" {
+  type        = string
+  description = "AKS name in Azure"
+  default     = "aks-shopfer"
+}
+
+variable "kubernetes_version" {
+  type        = string
+  description = "Kubernetes version"
+  default     = "1.30.14"
 }
 
 variable "node_count" {
-  description = "Number of nodes in the default node pool"
   type        = number
-  default     = 2
+  description = "Number of AKS worker nodes"
+  default     = 1
+}
+
+variable "vm_size" {
+  type        = string
+  description = "VM size for nodes"
+  default     = "Standard_B2s"
+}
+'''
+                
+                writeFile file: 'terraform/outputs.tf', text: '''
+output "aks_cluster_name" {
+  description = "AKS cluster name"
+  value       = azurerm_kubernetes_cluster.aks.name
+}
+
+output "aks_cluster_id" {
+  description = "AKS cluster ID"
+  value       = azurerm_kubernetes_cluster.aks.id
+}
+
+output "resource_group_name" {
+  description = "Resource group name"
+  value       = azurerm_resource_group.aks_rg.name
+}
+
+output "location" {
+  description = "Location"
+  value       = azurerm_resource_group.aks_rg.location
+}
+
+output "kube_config" {
+  description = "Kubernetes config"
+  value       = azurerm_kubernetes_cluster.aks.kube_config_raw
+  sensitive   = true
+}
+
+output "kubernetes_version" {
+  description = "Kubernetes version used"
+  value       = azurerm_kubernetes_cluster.aks.kubernetes_version
 }
 '''
             }
@@ -180,8 +254,17 @@ variable "node_count" {
                     
                     bat '''
                         cd terraform
+                        
+                        echo "🔐 Configuration des variables d'environnement Azure..."
+                        echo "Subscription ID: %ARM_SUBSCRIPTION_ID%"
+                        echo "Client ID: %ARM_CLIENT_ID%"
+                        echo "Tenant ID: %ARM_TENANT_ID%"
+                        
                         echo "🏗️ Initialisation de Terraform..."
                         terraform init
+                        
+                        echo "🔍 Validation de la configuration Terraform..."
+                        terraform validate
                         
                         echo "📋 Plan Terraform..."
                         terraform plan -out=tfplan
