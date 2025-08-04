@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shopfer-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  tls:
+  - hosts:
+    - shopfer-ecommerce.duckdns.org       # ✅ ton domaine
+    secretName: shopfer-tls       # le secret TLS généré automatiquement
+  rules:
+  - host: shopfer-ecommerce.duckdns.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: shopfer-service  # ✅ ton nom de service
+            port:
+              number: 80
