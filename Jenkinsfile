@@ -252,29 +252,101 @@ output "kubernetes_version" {
                     clientSecretVariable: 'ARM_CLIENT_SECRET',
                     tenantIdVariable: 'ARM_TENANT_ID')]) {
                     
-                    bat '''
-                        cd terraform
+                    script {
+                        // Check if resources exist and import them if necessary
+                        bat '''
+                            cd terraform
+                            
+                            echo "🔐 Configuration des variables d'environnement Azure..."
+                            echo "Subscription ID: %ARM_SUBSCRIPTION_ID%"
+                            echo "Client ID: %ARM_CLIENT_ID%"
+                            echo "Tenant ID: %ARM_TENANT_ID%"
+                            
+                            echo "🏗️ Initialisation de Terraform..."
+                            terraform init
+                            
+                            echo "🔍 Validation de la configuration Terraform..."
+                            terraform validate
+                        '''
                         
-                        echo "🔐 Configuration des variables d'environnement Azure..."
-                        echo "Subscription ID: %ARM_SUBSCRIPTION_ID%"
-                        echo "Client ID: %ARM_CLIENT_ID%"
-                        echo "Tenant ID: %ARM_TENANT_ID%"
+                        // Handle existing resources by importing or destroying them
+                        try {
+                            bat '''
+                                cd terraform
+                                echo "📋 Vérification de l'état actuel..."
+                                terraform plan -detailed-exitcode -out=tfplan
+                            '''
+                        } catch (Exception e) {
+                            echo "Plan failed, checking if resources need to be imported or cleaned up..."
+                            
+                            // Try to import existing resource group
+                            try {
+                                bat '''
+                                    cd terraform
+                                    echo "📥 Tentative d'import du Resource Group existant..."
+                                    terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%"
+                                '''
+                            } catch (Exception importError) {
+                                echo "Import failed, will try to clean up existing resources..."
+                            }
+                            
+                            // Check if AKS cluster exists and needs cleanup
+                            try {
+                                bat '''
+                                    echo "🔍 Vérification de l'existence du cluster AKS..."
+                                    az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID%
+                                    if %ERRORLEVEL% EQU 0 (
+                                        echo "⚠️  Cluster AKS existant détecté. Suppression pour recréer..."
+                                        az aks delete --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --yes --no-wait --subscription %ARM_SUBSCRIPTION_ID%
+                                        echo "⏳ Attente de la suppression du cluster..."
+                                        timeout /t 60 /nobreak
+                                    )
+                                '''
+                            } catch (Exception clusterError) {
+                                echo "Cluster check failed, continuing..."
+                            }
+                            
+                            // Clean up the resource group if needed
+                            try {
+                                bat '''
+                                    echo "🧹 Nettoyage du Resource Group existant..."
+                                    az group delete --name %TF_VAR_resource_group_name% --yes --no-wait --subscription %ARM_SUBSCRIPTION_ID%
+                                    echo "⏳ Attente de la suppression du Resource Group..."
+                                    timeout /t 30 /nobreak
+                                '''
+                            } catch (Exception rgError) {
+                                echo "Resource group cleanup failed, continuing..."
+                            }
+                            
+                            // Remove terraform state to start fresh
+                            bat '''
+                                cd terraform
+                                echo "🔄 Nettoyage de l'état Terraform..."
+                                if exist terraform.tfstate del terraform.tfstate
+                                if exist terraform.tfstate.backup del terraform.tfstate.backup
+                                if exist .terraform.lock.hcl del .terraform.lock.hcl
+                                
+                                echo "🏗️ Réinitialisation de Terraform..."
+                                terraform init -reconfigure
+                            '''
+                        }
                         
-                        echo "🏗️ Initialisation de Terraform..."
-                        terraform init
-                        
-                        echo "🔍 Validation de la configuration Terraform..."
-                        terraform validate
-                        
-                        echo "📋 Plan Terraform..."
-                        terraform plan -out=tfplan
-                        
-                        echo "🚀 Application de l'infrastructure..."
-                        terraform apply -auto-approve tfplan
-                        
-                        echo "💾 Sauvegarde de la config Kubernetes..."
-                        terraform output -raw kube_config > ../kubeconfig
-                    '''
+                        // Now run the plan and apply
+                        bat '''
+                            cd terraform
+                            echo "📋 Nouveau plan Terraform..."
+                            terraform plan -out=tfplan
+                            
+                            echo "🚀 Application de l'infrastructure..."
+                            terraform apply -auto-approve tfplan
+                            
+                            echo "✅ Vérification des outputs..."
+                            terraform output
+                            
+                            echo "💾 Sauvegarde de la config Kubernetes..."
+                            terraform output -raw kube_config > ../kubeconfig
+                        '''
+                    }
                 }
             }
         }
