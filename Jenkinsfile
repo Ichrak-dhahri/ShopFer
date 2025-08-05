@@ -7,7 +7,7 @@ pipeline {
         DOCKER_IMAGE_NAME = 'farahabbes/shopferimgg'
         DOCKER_TAG = "${BUILD_NUMBER}"
         
-        // Azure credentials - These will be set from Jenkins credentials
+        // Azure credentials
         AZURE_CREDENTIALS = credentials('azure-service-principal')
         
         // Terraform variables
@@ -212,9 +212,32 @@ pipeline {
             }
         }
         
+        stage('Clean Existing Resources') {
+            steps {
+                bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    
+                    echo "🧹 Nettoyage des ressources existantes..."
+                    
+                    REM Supprimer l'ingress existant s'il existe
+                    kubectl delete ingress shopfer-ingress -n %APP_NAMESPACE% --ignore-not-found=true
+                    kubectl delete ingress shopfer-ingress -n default --ignore-not-found=true
+                    
+                    REM Supprimer le déploiement existant
+                    kubectl delete deployment shopfer-app -n %APP_NAMESPACE% --ignore-not-found=true
+                    
+                    REM Supprimer le service existant
+                    kubectl delete service shopfer-service -n %APP_NAMESPACE% --ignore-not-found=true
+                    
+                    REM Attendre que les ressources soient supprimées
+                    timeout /t 10 /nobreak > nul
+                '''
+            }
+        }
+        
         stage('Create Kubernetes Manifests') {
             steps {
-                // Deployment
+                // Deployment avec ressources optimisées
                 writeFile file: 'k8s-deployment.yaml', text: """
 apiVersion: apps/v1
 kind: Deployment
@@ -225,7 +248,12 @@ metadata:
     app: shopfer
     version: v1
 spec:
-  replicas: 2
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: shopfer
@@ -246,11 +274,23 @@ spec:
           value: "4200"
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "250m"
+            memory: "128Mi"
+            cpu: "100m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 4200
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 4200
+          initialDelaySeconds: 60
+          periodSeconds: 30
 """
                 
                 // Service
@@ -279,7 +319,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: farahabbes210@gmail.com  # Remplacez par votre email
+    email: farahabbes210@gmail.com
     privateKeySecretRef:
       name: letsencrypt-prod
     solvers:
@@ -288,7 +328,7 @@ spec:
           class: nginx
 '''
                 
-                // Ingress
+                // Ingress avec annotation mise à jour
                 writeFile file: 'k8s-ingress.yaml', text: """
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -296,10 +336,11 @@ metadata:
   name: shopfer-ingress
   namespace: ${APP_NAMESPACE}
   annotations:
-    kubernetes.io/ingress.class: nginx
-    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
+  ingressClassName: nginx
   tls:
   - hosts:
     - ${DOMAIN_NAME}
@@ -325,15 +366,19 @@ spec:
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     
                     echo "🚀 Déploiement de l'application..."
+                    kubectl apply -f k8s-clusterissuer.yaml
                     kubectl apply -f k8s-deployment.yaml
                     kubectl apply -f k8s-service.yaml
-                    kubectl apply -f k8s-clusterissuer.yaml
                     
                     echo "⏳ Attente du déploiement..."
-                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=300s
+                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=600s
                     
                     echo "🌐 Application de l'Ingress..."
                     kubectl apply -f k8s-ingress.yaml
+                    
+                    echo "✅ Vérification du déploiement..."
+                    kubectl get pods -n %APP_NAMESPACE%
+                    kubectl describe deployment shopfer-app -n %APP_NAMESPACE%
                 '''
             }
         }
@@ -346,7 +391,7 @@ spec:
                         
                         echo "🌍 Récupération de l'IP du LoadBalancer..."
                         
-                        set /a timeout=300
+                        set /a timeout=600
                         set /a counter=0
                         
                         :wait_loop
@@ -359,9 +404,11 @@ spec:
                         
                         if defined EXTERNAL_IP (
                             if not "%EXTERNAL_IP%"=="null" (
-                                echo "✅ IP externe obtenue: %EXTERNAL_IP%"
-                                echo %EXTERNAL_IP% > external_ip.txt
-                                goto :end_wait
+                                if not "%EXTERNAL_IP%"=="" (
+                                    echo "✅ IP externe obtenue: %EXTERNAL_IP%"
+                                    echo %EXTERNAL_IP% > external_ip.txt
+                                    goto :end_wait
+                                )
                             )
                         )
                         
@@ -402,9 +449,12 @@ spec:
                     
                     echo "📊 Vérification du déploiement..."
                     kubectl get deployments -n %APP_NAMESPACE%
-                    kubectl get pods -n %APP_NAMESPACE%
+                    kubectl get pods -n %APP_NAMESPACE% -o wide
                     kubectl get services -n %APP_NAMESPACE%
                     kubectl get ingress -n %APP_NAMESPACE%
+                    
+                    echo "🔍 Logs des pods:"
+                    kubectl logs deployment/shopfer-app -n %APP_NAMESPACE% --tail=20
                     
                     echo ""
                     echo "🌍 Application accessible sur: https://%DOMAIN_NAME%"
@@ -492,13 +542,11 @@ spec:
                         echo "=== Ressources Azure ==="
                         az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% --query "{name:name,location:location,provisioningState:properties.provisioningState}" -o table 2>nul || echo "Cannot query resource group"
                         
-                        az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% --query "{name:name,powerState:powerState.code,provisioningState:provisioningState}" -o table 2>nul || echo "Cannot query AKS cluster"
-                        
                         echo "=== État Kubernetes ==="
                         if exist kubeconfig (
                             set KUBECONFIG=%WORKSPACE%\\kubeconfig
                             kubectl get nodes 2>nul || echo "Cannot connect to cluster"
-                            kubectl get namespaces 2>nul || echo "Cannot list namespaces"
+                            kubectl get pods -n %APP_NAMESPACE% 2>nul || echo "Cannot list pods"
                         ) else (
                             echo "❌ No kubeconfig file found"
                         )
