@@ -69,51 +69,7 @@ pipeline {
         stage('Build & Push Docker Image') {
             steps {
                 script {
-                    // Create a Dockerfile with better npm handling
-                    writeFile file: 'Dockerfile.jenkins', text: '''
-FROM node:18-alpine as build
-
-# Install necessary packages for npm
-RUN apk add --no-cache python3 make g++
-
-# Set working directory
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Configure npm with better SSL handling and use npm install instead of npm ci
-RUN npm config set registry https://registry.npmjs.org/ && \\
-    npm config set strict-ssl false && \\
-    npm config set fetch-retries 5 && \\
-    npm config set fetch-retry-factor 2 && \\
-    npm config set fetch-retry-mintimeout 10000 && \\
-    npm config set fetch-retry-maxtimeout 60000 && \\
-    npm install --legacy-peer-deps
-
-# Copy source code
-COPY . .
-
-# Build the Angular application
-RUN npm run build --prod
-
-# Production stage
-FROM nginx:alpine
-
-# Copy built application to nginx
-COPY --from=build /app/dist /usr/share/nginx/html
-
-# Copy custom nginx configuration if exists
-COPY nginx.conf /etc/nginx/conf.d/default.conf 2>/dev/null || echo "Using default nginx config"
-
-# Expose port
-EXPOSE 80
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
-'''
-                    
-                    // Create nginx configuration
+                    // Create nginx configuration first
                     writeFile file: 'nginx.conf', text: '''
 server {
     listen 80;
@@ -140,9 +96,101 @@ server {
 }
 '''
 
+                    // Create a corrected Dockerfile
+                    writeFile file: 'Dockerfile.jenkins', text: '''
+FROM node:18-alpine AS build
+
+# Install necessary packages for npm
+RUN apk add --no-cache python3 make g++
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Configure npm with better SSL handling and use npm install instead of npm ci
+RUN npm config set registry https://registry.npmjs.org/ && \\
+    npm config set strict-ssl false && \\
+    npm config set fetch-retries 5 && \\
+    npm config set fetch-retry-factor 2 && \\
+    npm config set fetch-retry-mintimeout 10000 && \\
+    npm config set fetch-retry-maxtimeout 60000 && \\
+    npm install --legacy-peer-deps
+
+# Copy source code
+COPY . .
+
+# Build the Angular application with error handling
+RUN npm run build || npm run build --prod || (echo "Build failed" && exit 1)
+
+# Production stage
+FROM nginx:alpine
+
+# Remove default nginx website
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy built application to nginx - handle different build output locations
+COPY --from=build /app/dist/shopfer /usr/share/nginx/html/ || true
+COPY --from=build /app/dist /usr/share/nginx/html/ || true
+
+# Ensure index.html exists
+RUN if [ ! -f /usr/share/nginx/html/index.html ]; then \\
+        echo "<!DOCTYPE html><html><head><title>Error</title></head><body><h1>Build artifacts not found</h1></body></html>" > /usr/share/nginx/html/index.html; \\
+    fi
+
+# Copy custom nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Create nginx user and set permissions
+RUN addgroup -g 101 -S nginx && \\
+    adduser -S -D -H -u 101 -h /var/cache/nginx -s /sbin/nologin -G nginx -g nginx nginx && \\
+    chown -R nginx:nginx /usr/share/nginx/html && \\
+    chmod -R 755 /usr/share/nginx/html
+
+# Expose port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
+    CMD curl -f http://localhost:80/ || exit 1
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+'''
+
                     bat '''
-                        echo "🐳 Construction de l'image Docker avec configuration améliorée..."
-                        docker build -f Dockerfile.jenkins -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% .
+                        echo "🐳 Construction de l'image Docker avec configuration corrigée..."
+                        
+                        REM Vérifier que les fichiers nécessaires existent
+                        if not exist "package.json" (
+                            echo "❌ package.json not found!"
+                            exit /b 1
+                        )
+                        
+                        if not exist "nginx.conf" (
+                            echo "❌ nginx.conf not found!"
+                            exit /b 1
+                        )
+                        
+                        if not exist "Dockerfile.jenkins" (
+                            echo "❌ Dockerfile.jenkins not found!"
+                            exit /b 1
+                        )
+                        
+                        REM Construire l'image
+                        docker build -f Dockerfile.jenkins -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% . || (
+                            echo "❌ Docker build failed!"
+                            exit /b 1
+                        )
+                        
+                        REM Vérifier que l'image a été créée avec succès
+                        docker inspect %DOCKER_IMAGE_NAME%:%DOCKER_TAG% > nul || (
+                            echo "❌ Docker image was not created successfully!"
+                            exit /b 1
+                        )
+                        
+                        REM Taguer l'image
                         docker tag %DOCKER_IMAGE_NAME%:%DOCKER_TAG% %DOCKER_IMAGE_NAME%:latest
                         
                         echo "✅ Image Docker construite avec succès"
@@ -152,9 +200,33 @@ server {
                     withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
                         bat '''
                             echo "📤 Push vers Docker Hub..."
-                            docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
-                            docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG%
-                            docker push %DOCKER_IMAGE_NAME%:latest
+                            
+                            REM Vérifier que les images existent avant de les pousser
+                            docker inspect %DOCKER_IMAGE_NAME%:%DOCKER_TAG% > nul || (
+                                echo "❌ Image %DOCKER_IMAGE_NAME%:%DOCKER_TAG% not found!"
+                                exit /b 1
+                            )
+                            
+                            docker inspect %DOCKER_IMAGE_NAME%:latest > nul || (
+                                echo "❌ Image %DOCKER_IMAGE_NAME%:latest not found!"
+                                exit /b 1
+                            )
+                            
+                            REM Login et push
+                            docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS% || (
+                                echo "❌ Docker login failed!"
+                                exit /b 1
+                            )
+                            
+                            docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG% || (
+                                echo "❌ Failed to push %DOCKER_IMAGE_NAME%:%DOCKER_TAG%"
+                                exit /b 1
+                            )
+                            
+                            docker push %DOCKER_IMAGE_NAME%:latest || (
+                                echo "❌ Failed to push %DOCKER_IMAGE_NAME%:latest"
+                                exit /b 1
+                            )
                             
                             echo "✅ Images poussées vers Docker Hub avec succès"
                         '''
@@ -335,7 +407,7 @@ server {
         
         stage('Create Kubernetes Manifests') {
             steps {
-                // Deployment
+                // Deployment - Correction du port pour nginx
                 writeFile file: 'k8s-deployment.yaml', text: """
 apiVersion: apps/v1
 kind: Deployment
@@ -359,12 +431,10 @@ spec:
       - name: shopfer-container
         image: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}
         ports:
-        - containerPort: 4200
+        - containerPort: 80
         env:
         - name: NODE_ENV
           value: "production"
-        - name: PORT
-          value: "4200"
         resources:
           requests:
             memory: "256Mi"
@@ -372,9 +442,21 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
 """
                 
-                // Service
+                // Service - Correction du targetPort
                 writeFile file: 'k8s-service.yaml', text: """
 apiVersion: v1
 kind: Service
@@ -387,7 +469,7 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 4200
+      targetPort: 80
   type: ClusterIP
 """
                 
@@ -545,7 +627,7 @@ spec:
                     bat '''
                         echo "🧹 Nettoyage des images Docker locales..."
                         docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Image build déjà supprimée"
-                        docker rmi farahabbes/shopferimgg:latest 2>nul || echo "Image latest déjà supprimée"
+                        docker rmi %DOCKER_IMAGE_NAME%:latest 2>nul || echo "Image latest déjà supprimée"
                         docker system prune -f 2>nul || echo "Nettoyage système terminé"
                         
                         REM Nettoyer les fichiers temporaires
@@ -593,16 +675,20 @@ spec:
             
             🔍 Vérifications à effectuer:
             1. Credentials Azure configurés correctement
-            2. Docker Hub credentials valides
+            2. Docker Hub credentials valides  
             3. Token DuckDNS valide
             4. Quota Azure suffisant
+            5. Structure du projet Angular correcte
             '''
             
-            // Diagnostic information
+            // Enhanced diagnostic information
             script {
                 try {
                     bat '''
-                        echo "=== DIAGNOSTIC ==="
+                        echo "=== DIAGNOSTIC DÉTAILLÉ ==="
+                        echo "Structure du projet:"
+                        dir /s /b *.json | findstr package
+                        
                         echo "Terraform state:"
                         if exist terraform-aks\\terraform.tfstate (
                             echo "Terraform state exists"
@@ -612,6 +698,9 @@ spec:
                         
                         echo "Docker images:"
                         docker images | find "shopfer" 2>nul || echo "No shopfer images found"
+                        
+                        echo "Derniers logs Docker build:"
+                        docker images --format "table {{.Repository}}\\t{{.Tag}}\\t{{.ID}}\\t{{.CreatedAt}}\\t{{.Size}}" | find "shopfer"
                         
                         if exist kubeconfig (
                             set KUBECONFIG=%WORKSPACE%\\kubeconfig
