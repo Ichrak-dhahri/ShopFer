@@ -198,20 +198,6 @@ pipeline {
             }
         }
         
-        stage('Install cert-manager') {
-            steps {
-                bat '''
-                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                    
-                    echo "🔐 Installation de cert-manager..."
-                    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
-                    
-                    echo "⏳ Attente du démarrage de cert-manager..."
-                    kubectl wait --namespace cert-manager --for=condition=ready pod --selector=app.kubernetes.io/instance=cert-manager --timeout=300s
-                '''
-            }
-        }
-        
         stage('Clean Existing Resources') {
             steps {
                 powershell '''
@@ -311,25 +297,7 @@ spec:
   type: ClusterIP
 """
                 
-                // ClusterIssuer for Let's Encrypt
-                writeFile file: 'k8s-clusterissuer.yaml', text: '''
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: farahabbes210@gmail.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-    - http01:
-        ingress:
-          class: nginx
-'''
-                
-                // Ingress avec annotation mise à jour
+                // Ingress HTTP SEULEMENT (sans TLS/HTTPS)
                 writeFile file: 'k8s-ingress.yaml', text: """
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -338,14 +306,9 @@ metadata:
   namespace: ${APP_NAMESPACE}
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
 spec:
   ingressClassName: nginx
-  tls:
-  - hosts:
-    - ${DOMAIN_NAME}
-    secretName: shopfer-tls
   rules:
   - host: ${DOMAIN_NAME}
     http:
@@ -367,14 +330,13 @@ spec:
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     
                     echo "🚀 Déploiement de l'application..."
-                    kubectl apply -f k8s-clusterissuer.yaml
                     kubectl apply -f k8s-deployment.yaml
                     kubectl apply -f k8s-service.yaml
                     
                     echo "⏳ Attente du déploiement..."
                     kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=600s
                     
-                    echo "🌐 Application de l'Ingress..."
+                    echo "🌐 Application de l'Ingress (HTTP seulement)..."
                     kubectl apply -f k8s-ingress.yaml
                     
                     echo "✅ Vérification du déploiement..."
@@ -451,7 +413,7 @@ spec:
                     kubectl logs deployment/shopfer-app -n %APP_NAMESPACE% --tail=20
                     
                     echo ""
-                    echo "🌍 Application accessible sur: https://%DOMAIN_NAME%"
+                    echo "🌍 Application accessible sur: http://%DOMAIN_NAME%"
                     echo ""
                     echo "🔍 Pour surveiller les logs:"
                     echo "kubectl logs -f deployment/shopfer-app -n %APP_NAMESPACE%"
@@ -490,8 +452,8 @@ spec:
                     echo """
                     ✅ Pipeline terminé avec succès !
                     
-                    🌍 Application déployée sur AKS
-                    📍 URL: https://${DOMAIN_NAME}
+                    🌍 Application déployée sur AKS (HTTP seulement)
+                    📍 URL: http://${DOMAIN_NAME}
                     🔗 IP LoadBalancer: ${externalIP}
                     
                     🔍 Commandes utiles:
