@@ -224,7 +224,7 @@ pipeline {
         
         stage('Create Kubernetes Manifests') {
             steps {
-                // Deployment avec ressources optimisées
+                // Deployment SANS health checks - VERSION CORRIGÉE
                 writeFile file: 'k8s-deployment.yaml', text: """
 apiVersion: apps/v1
 kind: Deployment
@@ -266,18 +266,6 @@ spec:
           limits:
             memory: "256Mi"
             cpu: "200m"
-        readinessProbe:
-          httpGet:
-            path: /
-            port: 4200
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 4200
-          initialDelaySeconds: 60
-          periodSeconds: 30
 """
                 
                 // Service
@@ -334,7 +322,7 @@ spec:
                     kubectl apply -f k8s-service.yaml
                     
                     echo "⏳ Attente du déploiement..."
-                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=600s
+                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=300s
                     
                     echo "🌐 Application de l'Ingress (HTTP seulement)..."
                     kubectl apply -f k8s-ingress.yaml
@@ -452,7 +440,7 @@ spec:
                     echo """
                     ✅ Pipeline terminé avec succès !
                     
-                    🌍 Application déployée sur AKS (HTTP seulement)
+                    🌍 Application déployée sur AKS (HTTP seulement) - SANS HEALTH CHECKS
                     📍 URL: http://${DOMAIN_NAME}
                     🔗 IP LoadBalancer: ${externalIP}
                     
