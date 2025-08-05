@@ -1,51 +1,37 @@
-# Étape 1: Build de l'application Angular SSR
-FROM node:18-alpine AS build
+# Dockerfile optimisé pour Angular
+FROM node:18-alpine as build
 
 WORKDIR /app
-
-# Copier les fichiers de dépendances
 COPY package*.json ./
+RUN npm ci --only=production
 
-# Installer toutes les dépendances (dev incluses pour le build)
-RUN npm ci
-
-# Copier le code source
 COPY . .
+RUN npm run build --prod
 
-# Builder l'application (Angular 18 gère SSR automatiquement)
-RUN npm run build
+# Stage de production avec NGINX
+FROM nginx:alpine
 
-# Debug: vérifier la structure générée
-RUN ls -la /app/front/shopfer/
+# Copier les fichiers buildés
+COPY --from=build /app/dist/* /usr/share/nginx/html/
 
-# Étape 2: Runtime avec Node.js pour SSR
-FROM node:18-alpine AS runtime
+# Configuration NGINX pour SPA
+COPY <<EOF /etc/nginx/conf.d/default.conf
+server {
+    listen 4200;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
 
-WORKDIR /app
+    # Support pour Single Page Application
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
 
-# Copier les fichiers de package pour les dépendances de production
-COPY package*.json ./
+    # Headers de sécurité
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+}
+EOF
 
-# Installer seulement les dépendances de production
-RUN npm ci --only=production && npm cache clean --force
-
-# Copier les fichiers buildés depuis l'étape précédente (correction ici)
-COPY --from=build /app/front/shopfer ./dist
-
-# Créer un utilisateur non-root pour la sécurité
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S angular -u 1001
-
-# S'assurer que les permissions sont correctes
-RUN chown -R angular:nodejs /app
-USER angular
-
-# Exposer le port
 EXPOSE 4200
-
-# Variables d'environnement
-ENV NODE_ENV=production
-ENV PORT=4200
-
-# Commande pour démarrer le serveur SSR
-CMD ["node", "dist/server/server.mjs"]
+CMD ["nginx", "-g", "daemon off;"]
