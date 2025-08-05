@@ -214,23 +214,24 @@ pipeline {
         
         stage('Clean Existing Resources') {
             steps {
-                bat '''
-                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                powershell '''
+                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
                     
-                    echo "🧹 Nettoyage des ressources existantes..."
+                    Write-Host "🧹 Nettoyage des ressources existantes..." -ForegroundColor Green
                     
-                    REM Supprimer l'ingress existant s'il existe
-                    kubectl delete ingress shopfer-ingress -n %APP_NAMESPACE% --ignore-not-found=true
+                    # Supprimer l'ingress existant s'il existe
+                    kubectl delete ingress shopfer-ingress -n $env:APP_NAMESPACE --ignore-not-found=true
                     kubectl delete ingress shopfer-ingress -n default --ignore-not-found=true
                     
-                    REM Supprimer le déploiement existant
-                    kubectl delete deployment shopfer-app -n %APP_NAMESPACE% --ignore-not-found=true
+                    # Supprimer le déploiement existant
+                    kubectl delete deployment shopfer-app -n $env:APP_NAMESPACE --ignore-not-found=true
                     
-                    REM Supprimer le service existant
-                    kubectl delete service shopfer-service -n %APP_NAMESPACE% --ignore-not-found=true
+                    # Supprimer le service existant
+                    kubectl delete service shopfer-service -n $env:APP_NAMESPACE --ignore-not-found=true
                     
-                    REM Attendre que les ressources soient supprimées
-                    timeout /t 10 /nobreak >nul 2>&1 || echo "Attente terminée"
+                    # Attendre que les ressources soient supprimées
+                    Write-Host "⏳ Attente de la suppression des ressources..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 10
                 '''
             }
         }
@@ -385,41 +386,34 @@ spec:
         
         stage('Get LoadBalancer IP') {
             steps {
-                script {
-                    bat '''
-                        set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                powershell '''
+                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
+                    
+                    Write-Host "🌍 Récupération de l'IP du LoadBalancer..." -ForegroundColor Green
+                    
+                    $timeout = 600
+                    $counter = 0
+                    $externalIP = $null
+                    
+                    do {
+                        if ($counter -ge $timeout) {
+                            Write-Host "⚠️ Timeout atteint pour l'obtention de l'IP externe" -ForegroundColor Yellow
+                            break
+                        }
                         
-                        echo "🌍 Récupération de l'IP du LoadBalancer..."
+                        $externalIP = kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>$null
                         
-                        set /a timeout=600
-                        set /a counter=0
+                        if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") {
+                            Write-Host "✅ IP externe obtenue: $externalIP" -ForegroundColor Green
+                            $externalIP | Out-File -FilePath "external_ip.txt" -Encoding ASCII
+                            break
+                        }
                         
-                        :wait_loop
-                        if %counter% geq %timeout% (
-                            echo "⚠️  Timeout atteint pour l'obtention de l'IP externe"
-                            goto :end_wait
-                        )
-                        
-                        for /f "delims=" %%i in ('kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath^="{.status.loadBalancer.ingress[0].ip}" 2^>nul') do set EXTERNAL_IP=%%i
-                        
-                        if defined EXTERNAL_IP (
-                            if not "%EXTERNAL_IP%"=="null" (
-                                if not "%EXTERNAL_IP%"=="" (
-                                    echo "✅ IP externe obtenue: %EXTERNAL_IP%"
-                                    echo %EXTERNAL_IP% > external_ip.txt
-                                    goto :end_wait
-                                )
-                            )
-                        )
-                        
-                        timeout /t 10 /nobreak >nul 2>&1
-                        set /a counter+=10
-                        echo "Attente de l'IP externe... (%counter%/%timeout% secondes)"
-                        goto :wait_loop
-                        
-                        :end_wait
-                    '''
-                }
+                        Start-Sleep -Seconds 10
+                        $counter += 10
+                        Write-Host "Attente de l'IP externe... ($counter/$timeout seconds)" -ForegroundColor Yellow
+                    } while ($true)
+                '''
             }
         }
         
@@ -428,17 +422,17 @@ spec:
                 expression { fileExists('external_ip.txt') }
             }
             steps {
-                script {
-                    bat '''
-                        set /p EXTERNAL_IP=<external_ip.txt
-                        
-                        echo "🌐 Configuration DNS DuckDNS..."
-                        echo "IP externe: %EXTERNAL_IP%"
-                        echo "Domaine: %DOMAIN_NAME%"
-                        
-                        powershell -Command "Invoke-RestMethod -Uri 'https://www.duckdns.org/update?domains=shopfer-ecommerce&token=%DUCKDNS_TOKEN%&ip=%EXTERNAL_IP%'"
-                    '''
-                }
+                powershell '''
+                    $externalIP = Get-Content "external_ip.txt" -Raw
+                    $externalIP = $externalIP.Trim()
+                    
+                    Write-Host "🌐 Configuration DNS DuckDNS..." -ForegroundColor Green
+                    Write-Host "IP externe: $externalIP" -ForegroundColor Cyan
+                    Write-Host "Domaine: $env:DOMAIN_NAME" -ForegroundColor Cyan
+                    
+                    $uri = "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
+                    Invoke-RestMethod -Uri $uri
+                '''
             }
         }
         
@@ -558,9 +552,9 @@ spec:
         }
         
         cleanup {
-            bat '''
-                if exist external_ip.txt del external_ip.txt 2>nul
-                if exist terraform-aks\\tfplan del terraform-aks\\tfplan 2>nul
+            powershell '''
+                if (Test-Path "external_ip.txt") { Remove-Item "external_ip.txt" }
+                if (Test-Path "terraform-aks\\tfplan") { Remove-Item "terraform-aks\\tfplan" }
             '''
         }
     }
