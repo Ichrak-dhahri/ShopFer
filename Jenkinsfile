@@ -28,7 +28,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                bat 'docker build -t shopferimgg .'
+                bat 'docker build -t farahabbes/shopferimgg .'
             }
         }
 
@@ -36,7 +36,7 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
                     bat """
-                        docker tag shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
+                        docker tag farahabbes/shopferimgg %DOCKER_HUB_USER%/shopferimgg:latest
                         docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
                         docker push %DOCKER_HUB_USER%/shopferimgg:latest
                     """
@@ -64,7 +64,7 @@ pipeline {
 
         stage('Run Docker Container') {
             steps {
-                bat 'docker run -d --name shopfer-container -p 4200:4200 shopferimgg'
+                bat 'docker run -d --name shopfer-container -p 4200:4200 farahabbes/shopferimgg'
 
                 // Verify container started
                 script {
@@ -138,21 +138,130 @@ pipeline {
             }
         }
 
+        stage('Setup Terraform') {
+            steps {
+                bat '''
+                    echo "🔧 Configuration de Terraform..."
+                    cd terraform-aks
+                    
+                    echo "Téléchargement de Terraform si nécessaire..."
+                    where terraform >nul 2>&1 || (
+                        echo "Installation de Terraform..."
+                        powershell -Command "Invoke-WebRequest -Uri 'https://releases.hashicorp.com/terraform/1.5.0/terraform_1.5.0_windows_amd64.zip' -OutFile 'terraform.zip'"
+                        powershell -Command "Expand-Archive -Path 'terraform.zip' -DestinationPath '.'"
+                        del terraform.zip
+                    )
+                    
+                    echo "✅ Terraform files already exist in terraform-aks directory"
+                    dir
+                '''
+            }
+        }
+
+        stage('Deploy Infrastructure with Terraform') {
+            environment {
+                TF_VAR_resource_group_name = 'rg-shopfer-aks'
+                TF_VAR_cluster_name = 'aks-shopfer'
+                TF_VAR_location = 'francecentral'
+                TF_VAR_node_count = '1'
+                TF_VAR_kubernetes_version = '1.30.14'
+                TF_VAR_vm_size = 'Standard_B2s'
+            }
+            steps {
+                withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
+                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID',
+                    clientIdVariable: 'ARM_CLIENT_ID',
+                    clientSecretVariable: 'ARM_CLIENT_SECRET',
+                    tenantIdVariable: 'ARM_TENANT_ID')]) {
+                    
+                    script {
+                        bat '''
+                            cd terraform-aks
+                            
+                            echo "🔐 Configuration des variables d'environnement Azure..."
+                            echo "Subscription ID: %ARM_SUBSCRIPTION_ID%"
+                            echo "Client ID: %ARM_CLIENT_ID%"
+                            echo "Tenant ID: %ARM_TENANT_ID%"
+                            
+                            echo "🔑 Azure CLI Login..."
+                            az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
+                            az account set --subscription %ARM_SUBSCRIPTION_ID%
+                            
+                            echo "🏗️ Initialisation de Terraform..."
+                            terraform init
+                            
+                            echo "🔍 Validation de la configuration Terraform..."
+                            terraform validate
+                        '''
+                        
+                        // Import existing resources strategy
+                        try {
+                            bat '''
+                                cd terraform-aks
+                                echo "📥 Import des ressources existantes..."
+                                
+                                REM Import Resource Group if exists
+                                az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
+                                if %ERRORLEVEL% EQU 0 (
+                                    echo "📦 Import du Resource Group existant..."
+                                    terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%" || echo "Resource Group import failed, continuing..."
+                                )
+                                
+                                REM Import AKS Cluster if exists  
+                                az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
+                                if %ERRORLEVEL% EQU 0 (
+                                    echo "☸️ Import du cluster AKS existant..."
+                                    terraform import azurerm_kubernetes_cluster.aks "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%/providers/Microsoft.ContainerService/managedClusters/%TF_VAR_cluster_name%" || echo "AKS import failed, continuing..."
+                                )
+                            '''
+                        } catch (Exception e) {
+                            echo "Import phase completed with warnings: ${e.getMessage()}"
+                        }
+                        
+                        // Plan and Apply
+                        bat '''
+                            cd terraform-aks
+                            echo "📋 Planning infrastructure changes..."
+                            terraform plan -out=tfplan
+                            
+                            echo "🚀 Applying infrastructure changes..."
+                            terraform apply -auto-approve tfplan
+                            
+                            echo "✅ Vérification des outputs..."
+                            terraform output
+                            
+                            echo "💾 Récupération de la config Kubernetes..."
+                            terraform output -raw kube_config > ../kubeconfig 2>nul || (
+                                echo "⚠️ Kube config not available from Terraform output"
+                                echo "🔄 Récupération via Azure CLI..."
+                                az aks get-credentials --resource-group %TF_VAR_resource_group_name% --name %TF_VAR_cluster_name% --file ../kubeconfig --overwrite-existing
+                            )
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Deploy to AKS') {
             environment {
-                RESOURCE_GROUP = 'shopfer'
-                CLUSTER_NAME = 'shopfer'
-                TENANT_ID = 'dbd6664d-4eb9-46eb-99d8-5c43ba153c61'
+                RESOURCE_GROUP = 'rg-shopfer-aks'
+                CLUSTER_NAME = 'aks-shopfer'
                 ACR_NAME = 'shopfer'
+                APP_NAMESPACE = 'shopfer-app'
+                DOMAIN_NAME = 'shopfer-ecommerce.duckdns.org'
             }
 
             steps {
-                withCredentials([usernamePassword(credentialsId: 'azure-sp', usernameVariable: 'AZURE_CLIENT_ID', passwordVariable: 'AZURE_CLIENT_SECRET')]) {
+                withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
+                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID',
+                    clientIdVariable: 'ARM_CLIENT_ID',
+                    clientSecretVariable: 'ARM_CLIENT_SECRET',
+                    tenantIdVariable: 'ARM_TENANT_ID')]) {
                     script {
                         try {
                             // Azure Login
                             bat """
-                            az login --service-principal -u ${AZURE_CLIENT_ID} -p ${AZURE_CLIENT_SECRET} --tenant ${TENANT_ID}
+                            az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
                             """
 
                             // Get AKS Credentials
@@ -163,25 +272,116 @@ pipeline {
                             // Test kubectl connectivity
                             bat 'kubectl cluster-info'
 
+                            // Create namespace
+                            bat """
+                            kubectl create namespace ${APP_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                            """
+
+                            // Install NGINX Ingress Controller
+                            bat '''
+                            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+                            kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+                            '''
+
+                            // Clean existing resources
+                            bat """
+                            kubectl delete ingress shopfer-ingress -n ${APP_NAMESPACE} --ignore-not-found=true
+                            kubectl delete deployment shopfer-app -n ${APP_NAMESPACE} --ignore-not-found=true  
+                            kubectl delete service shopfer-service -n ${APP_NAMESPACE} --ignore-not-found=true
+                            """
+
+                            // Create Kubernetes manifests
+                            writeFile file: 'deployment.yaml', text: """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopfer-app
+  namespace: ${APP_NAMESPACE}
+  labels:
+    app: shopfer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shopfer
+  template:
+    metadata:
+      labels:
+        app: shopfer
+    spec:
+      containers:
+      - name: shopfer-container
+        image: farahabbes/shopferimgg:latest
+        ports:
+        - containerPort: 4200
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+"""
+
+                            writeFile file: 'service.yaml', text: """
+apiVersion: v1
+kind: Service
+metadata:
+  name: shopfer-service
+  namespace: ${APP_NAMESPACE}
+spec:
+  selector:
+    app: shopfer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 4200
+  type: ClusterIP
+"""
+
+                            writeFile file: 'ingress.yaml', text: """
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shopfer-ingress
+  namespace: ${APP_NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ${DOMAIN_NAME}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: shopfer-service
+            port:
+              number: 80
+"""
+
                             // Apply Kubernetes manifests
                             bat 'kubectl apply -f service.yaml'
-                            bat 'kubectl apply -f configmap.yaml'
                             bat 'kubectl apply -f deployment.yaml'
-                            bat "kubectl rollout restart deployment shopfer-app"
+                            bat 'kubectl apply -f ingress.yaml'
+                            bat "kubectl rollout restart deployment shopfer-app -n ${APP_NAMESPACE}"
 
                             // Wait for deployment to complete
-                            bat 'kubectl rollout status deployment/shopfer-app --timeout=300s'
+                            bat "kubectl rollout status deployment/shopfer-app -n ${APP_NAMESPACE} --timeout=300s"
 
                             // Get pod status
-                            bat 'kubectl get pods -l app=shopfer -o wide'
+                            bat "kubectl get pods -n ${APP_NAMESPACE} -o wide"
 
                         } catch (Exception e) {
                             echo "⚠️ AKS deployment failed: ${e.getMessage()}"
 
                             // Diagnostic on failure
                             try {
-                                bat 'kubectl get pods -l app=shopfer -o wide || echo "No pods found"'
-                                bat 'kubectl describe deployment shopfer || echo "No deployment found"'
+                                bat "kubectl get pods -n ${APP_NAMESPACE} -o wide || echo \"No pods found\""
+                                bat "kubectl describe deployment shopfer-app -n ${APP_NAMESPACE} || echo \"No deployment found\""
                                 bat 'kubectl get events --sort-by=.metadata.creationTimestamp | tail -10 || echo "No events"'
                             } catch (Exception diagnosticError) {
                                 echo "⚠️ Could not retrieve diagnostics: ${diagnosticError.getMessage()}"
@@ -190,6 +390,44 @@ pipeline {
                             throw e // Re-throw to mark pipeline as failed
                         }
                     }
+                }
+            }
+        }
+
+        stage('Get LoadBalancer IP & Configure DNS') {
+            steps {
+                withCredentials([string(credentialsId: 'duckdns-token', variable: 'DUCKDNS_TOKEN')]) {
+                    powershell '''
+                        Write-Host "🌍 Récupération de l'IP du LoadBalancer..." -ForegroundColor Green
+                        
+                        $timeout = 600
+                        $counter = 0
+                        $externalIP = $null
+                        
+                        do {
+                            if ($counter -ge $timeout) {
+                                Write-Host "⚠️ Timeout atteint pour l'obtention de l'IP externe" -ForegroundColor Yellow
+                                break
+                            }
+                            
+                            $externalIP = kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>$null
+                            
+                            if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") {
+                                Write-Host "✅ IP externe obtenue: $externalIP" -ForegroundColor Green
+                                $externalIP | Out-File -FilePath "external_ip.txt" -Encoding ASCII
+                                
+                                # Configure DNS
+                                Write-Host "🌐 Configuration DNS DuckDNS..." -ForegroundColor Green
+                                $uri = "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
+                                Invoke-RestMethod -Uri $uri
+                                break
+                            }
+                            
+                            Start-Sleep -Seconds 10
+                            $counter += 10
+                            Write-Host "Attente de l'IP externe... ($counter/$timeout seconds)" -ForegroundColor Yellow
+                        } while ($true)
+                    '''
                 }
             }
         }
@@ -221,6 +459,9 @@ pipeline {
                     if (fileExists('robot-tests')) {
                         archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
                     }
+                    if (fileExists('terraform-aks')) {
+                        archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,external_ip.txt,*.yaml', allowEmptyArchive: true, fingerprint: true
+                    }
                 } catch (Exception e) {
                     echo "Warning: Could not archive artifacts"
                 }
@@ -228,15 +469,28 @@ pipeline {
         }
 
         success {
-            echo 'Pipeline completed successfully ✅'
-            echo 'Application is running at http://localhost:4200'
-
             script {
+                echo 'Pipeline completed successfully ✅'
+                
+                if (fileExists('external_ip.txt')) {
+                    def externalIP = readFile('external_ip.txt').trim()
+                    echo """
+                    🎉 Déploiement réussi !
+                    
+                    📍 URLs d'accès:
+                    - Application locale: http://localhost:4200
+                    - Application AKS: http://shopfer-ecommerce.duckdns.org
+                    - IP LoadBalancer: ${externalIP}
+                    """
+                } else {
+                    echo 'Application is running at http://localhost:4200'
+                }
+
                 try {
                     bat '''
                         echo === SUCCESS SUMMARY ===
                         docker ps --filter "name=shopfer-container" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-                        kubectl get pods -l app=shopfer -o wide 2>nul || echo "AKS deployment status unknown"
+                        kubectl get pods -n shopfer-app -o wide 2>nul || echo "AKS deployment status unknown"
                     '''
                 } catch (Exception e) {
                     echo "Could not display success summary"
@@ -264,7 +518,7 @@ pipeline {
                         if exist robot-tests\\output.xml echo "Robot test results available" else echo "No robot test results"
 
                         echo "AKS status:"
-                        kubectl get pods -l app=shopfer 2>nul || echo "Cannot connect to AKS or no shopfer pods"
+                        kubectl get pods -n shopfer-app 2>nul || echo "Cannot connect to AKS or no shopfer pods"
                     '''
                 } catch (Exception e) {
                     echo "Diagnostic failed but continuing..."
