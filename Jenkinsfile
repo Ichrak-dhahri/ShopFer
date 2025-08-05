@@ -279,7 +279,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: your-email@example.com  # Remplacez par votre email
+    email: farahabbes210@gmail.com  # Remplacez par votre email
     privateKeySecretRef:
       name: letsencrypt-prod
     solvers:
