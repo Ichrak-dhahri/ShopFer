@@ -102,7 +102,6 @@ pipeline {
                     tenantIdVariable: 'ARM_TENANT_ID')]) {
                     
                     script {
-                        // Check if resources exist and import them if necessary
                         bat '''
                             cd terraform-aks
                             
@@ -111,6 +110,10 @@ pipeline {
                             echo "Client ID: %ARM_CLIENT_ID%"
                             echo "Tenant ID: %ARM_TENANT_ID%"
                             
+                            echo "🔑 Azure CLI Login..."
+                            az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
+                            az account set --subscription %ARM_SUBSCRIPTION_ID%
+                            
                             echo "🏗️ Initialisation de Terraform..."
                             terraform init
                             
@@ -118,82 +121,48 @@ pipeline {
                             terraform validate
                         '''
                         
-                        // Handle existing resources by importing or destroying them
+                        // Import existing resources strategy
                         try {
                             bat '''
                                 cd terraform-aks
-                                echo "📋 Vérification de l'état actuel..."
-                                terraform plan -detailed-exitcode -out=tfplan
+                                echo "📥 Import des ressources existantes..."
+                                
+                                REM Import Resource Group if exists
+                                az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
+                                if %ERRORLEVEL% EQU 0 (
+                                    echo "📦 Import du Resource Group existant..."
+                                    terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%" || echo "Resource Group import failed, continuing..."
+                                )
+                                
+                                REM Import AKS Cluster if exists  
+                                az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
+                                if %ERRORLEVEL% EQU 0 (
+                                    echo "☸️ Import du cluster AKS existant..."
+                                    terraform import azurerm_kubernetes_cluster.aks "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%/providers/Microsoft.ContainerService/managedClusters/%TF_VAR_cluster_name%" || echo "AKS import failed, continuing..."
+                                )
                             '''
                         } catch (Exception e) {
-                            echo "Plan failed, checking if resources need to be imported or cleaned up..."
-                            
-                            // Try to import existing resource group
-                            try {
-                                bat '''
-                                    cd terraform-aks
-                                    echo "📥 Tentative d'import du Resource Group existant..."
-                                    terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%"
-                                '''
-                            } catch (Exception importError) {
-                                echo "Import failed, will try to clean up existing resources..."
-                            }
-                            
-                            // Check if AKS cluster exists and needs cleanup
-                            try {
-                                bat '''
-                                    echo "🔍 Vérification de l'existence du cluster AKS..."
-                                    az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID%
-                                    if %ERRORLEVEL% EQU 0 (
-                                        echo "⚠️  Cluster AKS existant détecté. Suppression pour recréer..."
-                                        az aks delete --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --yes --no-wait --subscription %ARM_SUBSCRIPTION_ID%
-                                        echo "⏳ Attente de la suppression du cluster..."
-                                        timeout /t 60 /nobreak
-                                    )
-                                '''
-                            } catch (Exception clusterError) {
-                                echo "Cluster check failed, continuing..."
-                            }
-                            
-                            // Clean up the resource group if needed
-                            try {
-                                bat '''
-                                    echo "🧹 Nettoyage du Resource Group existant..."
-                                    az group delete --name %TF_VAR_resource_group_name% --yes --no-wait --subscription %ARM_SUBSCRIPTION_ID%
-                                    echo "⏳ Attente de la suppression du Resource Group..."
-                                    timeout /t 30 /nobreak
-                                '''
-                            } catch (Exception rgError) {
-                                echo "Resource group cleanup failed, continuing..."
-                            }
-                            
-                            // Remove terraform state to start fresh
-                            bat '''
-                                cd terraform-aks
-                                echo "🔄 Nettoyage de l'état Terraform..."
-                                if exist terraform.tfstate del terraform.tfstate
-                                if exist terraform.tfstate.backup del terraform.tfstate.backup
-                                if exist .terraform.lock.hcl del .terraform.lock.hcl
-                                
-                                echo "🏗️ Réinitialisation de Terraform..."
-                                terraform init -reconfigure
-                            '''
+                            echo "Import phase completed with warnings: ${e.getMessage()}"
                         }
                         
-                        // Now run the plan and apply
+                        // Plan and Apply
                         bat '''
                             cd terraform-aks
-                            echo "📋 Nouveau plan Terraform..."
+                            echo "📋 Planning infrastructure changes..."
                             terraform plan -out=tfplan
                             
-                            echo "🚀 Application de l'infrastructure..."
+                            echo "🚀 Applying infrastructure changes..."
                             terraform apply -auto-approve tfplan
                             
                             echo "✅ Vérification des outputs..."
                             terraform output
                             
-                            echo "💾 Sauvegarde de la config Kubernetes..."
-                            terraform output -raw kube_config > ../kubeconfig
+                            echo "💾 Récupération de la config Kubernetes..."
+                            terraform output -raw kube_config > ../kubeconfig 2>nul || (
+                                echo "⚠️ Kube config not available from Terraform output"
+                                echo "🔄 Récupération via Azure CLI..."
+                                az aks get-credentials --resource-group %TF_VAR_resource_group_name% --name %TF_VAR_cluster_name% --file ../kubeconfig --overwrite-existing
+                            )
                         '''
                     }
                 }
@@ -503,35 +472,44 @@ spec:
             4. Quota Azure suffisant
             '''
             
-            // Diagnostic information
+            // Enhanced diagnostic information
             script {
                 try {
                     bat '''
-                        echo "=== DIAGNOSTIC ==="
-                        echo "Terraform state:"
+                        echo "=== DIAGNOSTIC DÉTAILLÉ ==="
+                        
+                        echo "=== État Terraform ==="
                         if exist terraform-aks\\terraform.tfstate (
-                            echo "Terraform state exists"
+                            echo "✅ Terraform state exists"
+                            terraform -chdir=terraform-aks state list 2>nul || echo "No resources in state"
                         ) else (
-                            echo "No Terraform state found"
+                            echo "❌ No Terraform state found"
                         )
                         
-                        echo "Docker images:"
+                        echo "=== Images Docker ==="
                         docker images | find "shopfer" 2>nul || echo "No shopfer images found"
                         
+                        echo "=== Ressources Azure ==="
+                        az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% --query "{name:name,location:location,provisioningState:properties.provisioningState}" -o table 2>nul || echo "Cannot query resource group"
+                        
+                        az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% --query "{name:name,powerState:powerState.code,provisioningState:provisioningState}" -o table 2>nul || echo "Cannot query AKS cluster"
+                        
+                        echo "=== État Kubernetes ==="
                         if exist kubeconfig (
                             set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                            echo "Kubernetes status:"
                             kubectl get nodes 2>nul || echo "Cannot connect to cluster"
+                            kubectl get namespaces 2>nul || echo "Cannot list namespaces"
+                        ) else (
+                            echo "❌ No kubeconfig file found"
                         )
                     '''
                 } catch (Exception e) {
-                    echo "Diagnostic failed - continuing"
+                    echo "Diagnostic failed: ${e.getMessage()}"
                 }
             }
         }
         
         cleanup {
-            // Optional cleanup of temporary files
             bat '''
                 if exist external_ip.txt del external_ip.txt 2>nul
                 if exist terraform-aks\\tfplan del terraform-aks\\tfplan 2>nul
