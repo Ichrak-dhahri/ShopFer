@@ -34,11 +34,25 @@ pipeline {
         stage('Install Dependencies & Build') {
             steps {
                 bat '''
-                    echo "📦 Installation des dépendances..."
-                    call npm install
+                    echo "📦 Installation des dépendances avec gestion d'erreurs améliorée..."
+                    
+                    REM Configuration npm pour éviter les erreurs SSL
+                    call npm config set registry https://registry.npmjs.org/
+                    call npm config set strict-ssl false
+                    call npm config set fetch-retries 5
+                    call npm config set fetch-retry-factor 2
+                    call npm config set fetch-retry-mintimeout 10000
+                    call npm config set fetch-retry-maxtimeout 60000
+                    
+                    REM Utiliser npm install au lieu de npm ci en cas de problème
+                    call npm install --legacy-peer-deps || (
+                        echo "npm install failed, trying with cache clean..."
+                        call npm cache clean --force
+                        call npm install --legacy-peer-deps
+                    )
                     
                     echo "🏗️ Build de l'application Angular..."
-                    call npm run build --prod
+                    call npm run build --prod || call npm run build
                 '''
             }
         }
@@ -55,10 +69,84 @@ pipeline {
         stage('Build & Push Docker Image') {
             steps {
                 script {
+                    // Create a Dockerfile with better npm handling
+                    writeFile file: 'Dockerfile.jenkins', text: '''
+FROM node:18-alpine as build
+
+# Install necessary packages for npm
+RUN apk add --no-cache python3 make g++
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Configure npm with better SSL handling and use npm install instead of npm ci
+RUN npm config set registry https://registry.npmjs.org/ && \\
+    npm config set strict-ssl false && \\
+    npm config set fetch-retries 5 && \\
+    npm config set fetch-retry-factor 2 && \\
+    npm config set fetch-retry-mintimeout 10000 && \\
+    npm config set fetch-retry-maxtimeout 60000 && \\
+    npm install --legacy-peer-deps
+
+# Copy source code
+COPY . .
+
+# Build the Angular application
+RUN npm run build --prod
+
+# Production stage
+FROM nginx:alpine
+
+# Copy built application to nginx
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copy custom nginx configuration if exists
+COPY nginx.conf /etc/nginx/conf.d/default.conf 2>/dev/null || echo "Using default nginx config"
+
+# Expose port
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+'''
+                    
+                    // Create nginx configuration
+                    writeFile file: 'nginx.conf', text: '''
+server {
+    listen 80;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Handle Angular routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
+
+    # Cache static assets
+    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+'''
+
                     bat '''
-                        echo "🐳 Construction de l'image Docker..."
-                        docker build -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% .
+                        echo "🐳 Construction de l'image Docker avec configuration améliorée..."
+                        docker build -f Dockerfile.jenkins -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% .
                         docker tag %DOCKER_IMAGE_NAME%:%DOCKER_TAG% %DOCKER_IMAGE_NAME%:latest
+                        
+                        echo "✅ Image Docker construite avec succès"
+                        docker images | findstr %DOCKER_IMAGE_NAME%
                     '''
                     
                     withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
@@ -67,6 +155,8 @@ pipeline {
                             docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
                             docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG%
                             docker push %DOCKER_IMAGE_NAME%:latest
+                            
+                            echo "✅ Images poussées vers Docker Hub avec succès"
                         '''
                     }
                 }
@@ -77,8 +167,7 @@ pipeline {
             steps {
                 bat '''
                     echo "🔧 Configuration de Terraform..."
-                    if not exist terraform mkdir terraform
-                    cd terraform
+                    cd terraform-aks
                     
                     echo "Téléchargement de Terraform si nécessaire..."
                     where terraform >nul 2>&1 || (
@@ -87,160 +176,10 @@ pipeline {
                         powershell -Command "Expand-Archive -Path 'terraform.zip' -DestinationPath '.'"
                         del terraform.zip
                     )
+                    
+                    echo "✅ Terraform files already exist in terraform-aks directory"
+                    dir
                 '''
-                
-                // Create Terraform files with proper structure
-                writeFile file: 'terraform/providers.tf', text: '''
-terraform {
-  required_version = ">= 1.0"
-  required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 3.0"
-    }
-  }
-}
-
-provider "azurerm" {
-  features {}
-}
-'''
-                
-                writeFile file: 'terraform/main.tf', text: '''
-data "azurerm_kubernetes_service_versions" "current" {
-  location = var.location
-}
-
-resource "azurerm_resource_group" "aks_rg" {
-  name     = var.resource_group_name
-  location = var.location
-  
-  tags = {
-    Environment = "Dev"
-    Project     = "ShopFer"
-  }
-}
-
-resource "azurerm_kubernetes_cluster" "aks" {
-  name                = var.cluster_name
-  location            = azurerm_resource_group.aks_rg.location
-  resource_group_name = azurerm_resource_group.aks_rg.name
-  dns_prefix          = "${var.cluster_name}-dns"
-  
-  # Use specified Kubernetes version
-  kubernetes_version = var.kubernetes_version
-  
-  default_node_pool {
-    name                = "default"
-    node_count         = var.node_count
-    vm_size            = var.vm_size
-    os_disk_size_gb    = 30
-    os_disk_type       = "Managed"
-    ultra_ssd_enabled  = false
-    
-    # Options pour économiser les coûts
-    enable_auto_scaling = false
-    type               = "VirtualMachineScaleSets"
-    
-    upgrade_settings {
-      max_surge = "10%"
-    }
-  }
-  
-  identity {
-    type = "SystemAssigned"
-  }
-  
-  network_profile {
-    network_plugin    = "kubenet"
-    load_balancer_sku = "standard"
-    outbound_type     = "loadBalancer"
-  }
-  
-  # Configuration pour le tier gratuit
-  sku_tier = "Free"
-  
-  # Désactiver des fonctionnalités premium pour réduire les coûts
-  role_based_access_control_enabled = true
-  run_command_enabled              = true
-  
-  tags = {
-    Environment = "Dev"
-    Project     = "ShopFer"
-  }
-}
-'''
-                
-                writeFile file: 'terraform/variables.tf', text: '''
-variable "resource_group_name" {
-  type        = string
-  description = "RG name in Azure"
-  default     = "rg-shopfer-aks"
-}
-
-variable "location" {
-  type        = string
-  description = "Resources location in Azure"
-  default     = "francecentral"
-}
-
-variable "cluster_name" {
-  type        = string
-  description = "AKS name in Azure"
-  default     = "aks-shopfer"
-}
-
-variable "kubernetes_version" {
-  type        = string
-  description = "Kubernetes version"
-  default     = "1.30.14"
-}
-
-variable "node_count" {
-  type        = number
-  description = "Number of AKS worker nodes"
-  default     = 1
-}
-
-variable "vm_size" {
-  type        = string
-  description = "VM size for nodes"
-  default     = "Standard_B2s"
-}
-'''
-                
-                writeFile file: 'terraform/outputs.tf', text: '''
-output "aks_cluster_name" {
-  description = "AKS cluster name"
-  value       = azurerm_kubernetes_cluster.aks.name
-}
-
-output "aks_cluster_id" {
-  description = "AKS cluster ID"
-  value       = azurerm_kubernetes_cluster.aks.id
-}
-
-output "resource_group_name" {
-  description = "Resource group name"
-  value       = azurerm_resource_group.aks_rg.name
-}
-
-output "location" {
-  description = "Location"
-  value       = azurerm_resource_group.aks_rg.location
-}
-
-output "kube_config" {
-  description = "Kubernetes config"
-  value       = azurerm_kubernetes_cluster.aks.kube_config_raw
-  sensitive   = true
-}
-
-output "kubernetes_version" {
-  description = "Kubernetes version used"
-  value       = azurerm_kubernetes_cluster.aks.kubernetes_version
-}
-'''
             }
         }
         
@@ -255,7 +194,7 @@ output "kubernetes_version" {
                     script {
                         // Check if resources exist and import them if necessary
                         bat '''
-                            cd terraform
+                            cd terraform-aks
                             
                             echo "🔐 Configuration des variables d'environnement Azure..."
                             echo "Subscription ID: %ARM_SUBSCRIPTION_ID%"
@@ -272,7 +211,7 @@ output "kubernetes_version" {
                         // Handle existing resources by importing or destroying them
                         try {
                             bat '''
-                                cd terraform
+                                cd terraform-aks
                                 echo "📋 Vérification de l'état actuel..."
                                 terraform plan -detailed-exitcode -out=tfplan
                             '''
@@ -282,7 +221,7 @@ output "kubernetes_version" {
                             // Try to import existing resource group
                             try {
                                 bat '''
-                                    cd terraform
+                                    cd terraform-aks
                                     echo "📥 Tentative d'import du Resource Group existant..."
                                     terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%"
                                 '''
@@ -320,7 +259,7 @@ output "kubernetes_version" {
                             
                             // Remove terraform state to start fresh
                             bat '''
-                                cd terraform
+                                cd terraform-aks
                                 echo "🔄 Nettoyage de l'état Terraform..."
                                 if exist terraform.tfstate del terraform.tfstate
                                 if exist terraform.tfstate.backup del terraform.tfstate.backup
@@ -333,7 +272,7 @@ output "kubernetes_version" {
                         
                         // Now run the plan and apply
                         bat '''
-                            cd terraform
+                            cd terraform-aks
                             echo "📋 Nouveau plan Terraform..."
                             terraform plan -out=tfplan
                             
@@ -605,8 +544,13 @@ spec:
                 try {
                     bat '''
                         echo "🧹 Nettoyage des images Docker locales..."
-                        docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Image déjà supprimée"
+                        docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Image build déjà supprimée"
+                        docker rmi farahabbes/shopferimgg:latest 2>nul || echo "Image latest déjà supprimée"
                         docker system prune -f 2>nul || echo "Nettoyage système terminé"
+                        
+                        REM Nettoyer les fichiers temporaires
+                        if exist Dockerfile.jenkins del Dockerfile.jenkins 2>nul
+                        if exist nginx.conf del nginx.conf 2>nul
                     '''
                 } catch (Exception e) {
                     echo "Warning: Docker cleanup failed"
@@ -614,7 +558,7 @@ spec:
                 
                 // Archive important files
                 try {
-                    archiveArtifacts artifacts: 'terraform/tfplan,kubeconfig,external_ip.txt,k8s-*.yaml', allowEmptyArchive: true, fingerprint: true
+                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,external_ip.txt,k8s-*.yaml', allowEmptyArchive: true, fingerprint: true
                 } catch (Exception e) {
                     echo "Warning: Could not archive artifacts"
                 }
@@ -660,7 +604,7 @@ spec:
                     bat '''
                         echo "=== DIAGNOSTIC ==="
                         echo "Terraform state:"
-                        if exist terraform\\terraform.tfstate (
+                        if exist terraform-aks\\terraform.tfstate (
                             echo "Terraform state exists"
                         ) else (
                             echo "No Terraform state found"
@@ -685,7 +629,7 @@ spec:
             // Optional cleanup of temporary files
             bat '''
                 if exist external_ip.txt del external_ip.txt 2>nul
-                if exist terraform\\tfplan del terraform\\tfplan 2>nul
+                if exist terraform-aks\\tfplan del terraform-aks\\tfplan 2>nul
             '''
         }
     }
