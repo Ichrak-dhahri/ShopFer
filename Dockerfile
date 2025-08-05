@@ -12,11 +12,11 @@ RUN npm ci
 # Copier le code source
 COPY . .
 
-# Builder l'application Angular avec SSR
+# Builder l'application (Angular 18 gère SSR automatiquement)
 RUN npm run build
 
 # Debug: vérifier la structure générée
-RUN ls -la /app/dist/
+RUN ls -la /app/front/shopfer/
 
 # Étape 2: Runtime avec Node.js pour SSR
 FROM node:18-alpine AS runtime
@@ -29,8 +29,8 @@ COPY package*.json ./
 # Installer seulement les dépendances de production
 RUN npm ci --only=production && npm cache clean --force
 
-# Copier les fichiers buildés depuis l'étape précédente
-COPY --from=build /app/dist ./dist
+# Copier les fichiers buildés depuis l'étape précédente (correction ici)
+COPY --from=build /app/front/shopfer ./dist
 
 # Créer un utilisateur non-root pour la sécurité
 RUN addgroup -g 1001 -S nodejs
@@ -48,5 +48,4 @@ ENV NODE_ENV=production
 ENV PORT=4200
 
 # Commande pour démarrer le serveur SSR
-# Adapter selon votre structure de build Angular
 CMD ["node", "dist/server/server.mjs"]
