@@ -230,7 +230,7 @@ pipeline {
                     kubectl delete service shopfer-service -n %APP_NAMESPACE% --ignore-not-found=true
                     
                     REM Attendre que les ressources soient supprimées
-                    timeout /t 10 /nobreak > nul
+                    timeout /t 10 /nobreak >nul 2>&1 || echo "Attente terminée"
                 '''
             }
         }
@@ -412,7 +412,7 @@ spec:
                             )
                         )
                         
-                        timeout /t 10 /nobreak > nul
+                        timeout /t 10 /nobreak >nul 2>&1
                         set /a counter+=10
                         echo "Attente de l'IP externe... (%counter%/%timeout% secondes)"
                         goto :wait_loop
