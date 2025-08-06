@@ -5,11 +5,8 @@ pipeline {
         DOCKER_HUB_REGISTRY = 'docker.io'
         DOCKER_IMAGE_NAME = 'farahabbes/shopferimgg'
         DOCKER_TAG = "${BUILD_NUMBER}"
-        
-        // Variables pour AKS existant
         RESOURCE_GROUP_NAME = 'rg-shopfer-aks'
         CLUSTER_NAME = 'aks-shopfer'
-        
         APP_NAMESPACE = 'shopfer-app'
         DOMAIN_NAME = 'shopfer-ecommerce.duckdns.org'
         DUCKDNS_TOKEN = credentials('duckdns-token')
@@ -25,96 +22,59 @@ pipeline {
         stage('Build & Test') {
             steps {
                 bat '''
-                    call npm install
-                    call npm run build --prod
+                    call npm install && call npm run build --prod
                     call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage
                 '''
             }
         }
         
-        stage('Build Angular Application') {
-            steps {
-                bat 'call npm run build'
-            }
-        }
-        
         stage('Start Angular Application') {
             steps {
-                bat '''
-                    start "Angular App" /min cmd /c "npm run start"
-                '''
+                bat 'start "Angular App" /min cmd /c "npm run start"'
                 
                 script {
-                    def maxAttempts = 30
-                    def attempt = 0
-                    def appStarted = false
+                    def maxAttempts = 30, attempt = 0, appStarted = false
                     
                     while (attempt < maxAttempts && !appStarted) {
                         try {
                             sleep(2)
                             bat 'netstat -an | find "4200" | find "LISTENING"'
                             appStarted = true
-                        } catch (Exception e) {
-                            attempt++
-                        }
+                        } catch (Exception e) { attempt++ }
                     }
                     
-                    if (!appStarted) {
-                        error("Application Angular n'a pas démarré")
-                    }
+                    if (!appStarted) error("Application Angular n'a pas démarré")
                 }
             }
         }
         
-        stage('Setup Robot Framework Environment') {
+        stage('Setup Robot Framework') {
             steps {
                 bat '''
                     if not exist robot-tests mkdir robot-tests
-                    cd robot-tests
-                    if exist robot_env rmdir /s /q robot_env
-                    python -m venv robot_env
-                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip
+                    cd robot-tests && if exist robot_env rmdir /s /q robot_env
+                    python -m venv robot_env && robot_env\\Scripts\\python.exe -m pip install --upgrade pip
                     robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager
                 '''
             }
         }
         
-        stage('Verify Application Status') {
+        stage('Verify & Test') {
             steps {
                 bat '''
-                    tasklist | find "node.exe" || echo No Node process
-                    netstat -an | find "4200" || echo Port 4200 not found
-                    curl -f http://localhost:4200 || echo Connection failed
+                    curl -f http://localhost:4200 >nul 2>&1 || (echo Connection failed && exit /b 1)
+                    cd robot-tests && robot_env\\Scripts\\robot --outputdir . --variable BROWSER:headlesschrome --variable URL:http://localhost:4200 --loglevel INFO hello.robot
                 '''
             }
         }
         
-        stage('Run Robot Framework tests') {
-            steps {
-                bat '''
-                    cd robot-tests
-                    robot_env\\Scripts\\robot --outputdir . ^
-                                              --variable BROWSER:headlesschrome ^
-                                              --variable URL:http://localhost:4200 ^
-                                              --loglevel INFO ^
-                                              hello.robot
-                '''
-            }
-        }
-        
-        stage('Stop Angular Application') {
+        stage('Cleanup & Docker Build') {
             steps {
                 bat '''
                     for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
-                    taskkill /f /im node.exe 2>nul
-                    taskkill /f /im npm.cmd 2>nul
-                    exit /b 0
+                    taskkill /f /im node.exe /im npm.cmd 2>nul || exit /b 0
                 '''
-            }
-        }
-        
-        stage('Docker Build & Push') {
-            steps {
+                
                 script {
                     bat '''
                         docker build -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% .
@@ -124,21 +84,18 @@ pipeline {
                     withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
                         bat '''
                             docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
-                            docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG%
-                            docker push %DOCKER_IMAGE_NAME%:latest
+                            docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG% && docker push %DOCKER_IMAGE_NAME%:latest
                         '''
                     }
                 }
             }
         }
         
-        stage('Connect to Existing AKS') {
+        stage('AKS Connection & Setup') {
             steps {
                 withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
-                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID',
-                    clientIdVariable: 'ARM_CLIENT_ID',
-                    clientSecretVariable: 'ARM_CLIENT_SECRET',
-                    tenantIdVariable: 'ARM_TENANT_ID')]) {
+                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID', clientIdVariable: 'ARM_CLIENT_ID',
+                    clientSecretVariable: 'ARM_CLIENT_SECRET', tenantIdVariable: 'ARM_TENANT_ID')]) {
                     
                     bat '''
                         az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
@@ -146,14 +103,9 @@ pipeline {
                         az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing
                     '''
                 }
-            }
-        }
-        
-        stage('Setup K8s & NGINX') {
-            steps {
+                
                 bat '''
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                    kubectl cluster-info
                     kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
                     kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
                     kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
@@ -161,7 +113,7 @@ pipeline {
             }
         }
         
-        stage('Clean & Deploy App') {
+        stage('Deploy Application') {
             steps {
                 powershell '''
                     $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
@@ -252,7 +204,7 @@ spec:
             }
         }
         
-        stage('Configure DNS') {
+        stage('DNS & Verification') {
             steps {
                 powershell '''
                     $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
@@ -261,26 +213,18 @@ spec:
                     do {
                         if ($counter -ge $timeout) { break }
                         $externalIP = kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>$null
-                        if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") {
-                            break
-                        }
+                        if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") { break }
                         Start-Sleep 10; $counter += 10
                     } while ($true)
                     
                     if ($externalIP) {
-                        $uri = "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
-                        Invoke-RestMethod -Uri $uri
+                        Invoke-RestMethod -Uri "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
                     }
                 '''
-            }
-        }
-        
-        stage('Verify') {
-            steps {
+                
                 bat '''
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                    kubectl get all -n %APP_NAMESPACE%
-                    kubectl get ingress -n %APP_NAMESPACE%
+                    kubectl get all,ingress -n %APP_NAMESPACE%
                 '''
             }
         }
@@ -290,41 +234,21 @@ spec:
         always {
             script {
                 try {
-                    robot(
-                        outputPath: 'robot-tests',
-                        outputFileName: 'output.xml',
-                        reportFileName: 'report.html',
-                        logFileName: 'log.html',
-                        disableArchiveOutput: false,
-                        passThreshold: 80,
-                        unstableThreshold: 60,
-                        otherFiles: '*.png,*.jpg'
-                    )
-                } catch (Exception e) {
-                    // Robot results publication failed
-                }
+                    robot(outputPath: 'robot-tests', outputFileName: 'output.xml', reportFileName: 'report.html', 
+                          logFileName: 'log.html', disableArchiveOutput: false, passThreshold: 80, 
+                          unstableThreshold: 60, otherFiles: '*.png,*.jpg')
+                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},kubeconfig,k8s-all.yaml', 
+                                   allowEmptyArchive: true, fingerprint: true
+                } catch (Exception e) { /* Ignore errors */ }
                 
-                try {
-                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},kubeconfig,k8s-all.yaml', allowEmptyArchive: true, fingerprint: true
-                } catch (Exception e) {
-                    // Archive failed
-                }
-                
-                bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
+                bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || exit /b 0'
             }
         }
         
-        success {
-            echo "✅ Pipeline successful! App: http://${DOMAIN_NAME}"
-        }
-        
-        failure {
-            echo "❌ Pipeline failed! Check: Azure credentials, Docker Hub, DuckDNS token"
-            bat '''
-                tasklist | find "node.exe" || echo No Node process
-                netstat -an | find "4200" || echo Port 4200 not found
-                if exist robot-tests dir robot-tests
-            '''
+        success { echo "✅ Pipeline réussi! App: http://${DOMAIN_NAME}" }
+        failure { 
+            echo "❌ Pipeline échoué! Vérifiez: Azure credentials, Docker Hub, DuckDNS token"
+            bat 'if exist robot-tests dir robot-tests'
         }
     }
 }
