@@ -138,25 +138,27 @@ pipeline {
                                               hello.robot
                 '''
             }
-            post {
-                always {
-                    // Arrêter l'application Angular après les tests
-                    script {
-                        try {
-                            bat 'taskkill /f /im "node.exe" 2>nul || echo "Aucun processus Node.js à arrêter"'
-                            echo "✅ Application Angular arrêtée"
-                        } catch (Exception e) {
-                            echo "Avertissement lors de l'arrêt de l'application: ${e.getMessage()}"
-                        }
-                    }
-                    // Archiver les résultats des tests Robot Framework
-                    archiveArtifacts artifacts: 'robot-tests/*.html,robot-tests/*.xml,robot-tests/log.html,robot-tests/report.html', allowEmptyArchive: true
-                    echo "✅ Tests Robot Framework terminés - 12 tests passés"
-                    echo "📊 Rapports disponibles dans les artifacts Jenkins :"
-                    echo "   - log.html : Journal détaillé des tests"
-                    echo "   - report.html : Rapport de synthèse"
-                    echo "   - output.xml : Résultats au format XML"
-                }
+        }
+        
+        stage('Stop Angular Application') {
+            steps {
+                echo "Arrêt de l'application Angular..."
+                
+                // Arrêter l'application Angular de façon plus robuste
+                bat '''
+                    echo Arrêt des processus Node.js sur le port 4200...
+                    for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
+                        echo Arrêt du processus %%a
+                        taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
+                    )
+                    
+                    echo Arrêt de tous les processus npm et node...
+                    taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
+                    taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
+                    
+                    echo Nettoyage terminé
+                    exit /b 0
+                '''
             }
         }
         
@@ -382,22 +384,56 @@ spec:
         always {
             script {
                 try {
-                    // Nettoyer les processus Node.js restants
-                    bat 'taskkill /f /im "node.exe" 2>nul || echo "Aucun processus Node.js à arrêter"'
-                    bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
-                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,k8s-all.yaml,robot-tests/*.html,robot-tests/*.xml', allowEmptyArchive: true
+                    // Publication des résultats Robot Framework avec gestion d'erreur
+                    robot(
+                        outputPath: 'robot-tests',
+                        outputFileName: 'output.xml',
+                        reportFileName: 'report.html',
+                        logFileName: 'log.html',
+                        disableArchiveOutput: false,
+                        passThreshold: 80,
+                        unstableThreshold: 60,
+                        otherFiles: '*.png,*.jpg'
+                    )
                 } catch (Exception e) {
-                    echo "Cleanup warnings"
+                    echo "⚠️ Erreur lors de la publication des résultats Robot: ${e.getMessage()}"
                 }
+                
+                // Archiver les artefacts
+                try {
+                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},terraform-aks/tfplan,kubeconfig,k8s-all.yaml', allowEmptyArchive: true, fingerprint: true
+                } catch (Exception e) {
+                    echo "⚠️ Erreur lors de l'archivage: ${e.getMessage()}"
+                }
+                
+                // Nettoyage Docker
+                bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
             }
         }
         
         success {
+            echo "✅ Pipeline terminé avec succès!"
+            echo "✅ Tests Robot Framework exécutés"
             echo "✅ Deployment successful! App available at: http://${DOMAIN_NAME}"
         }
         
         failure {
-            echo "❌ Pipeline failed! Check logs and verify: Azure credentials, Docker Hub access, DuckDNS token"
+            echo "❌ Pipeline échoué! Check logs and verify: Azure credentials, Docker Hub access, DuckDNS token"
+            
+            // Diagnostic en cas d'échec
+            bat '''
+                echo === DIAGNOSTIC ===
+                echo État des processus Node.js:
+                tasklist | find "node.exe" || echo Aucun processus Node.js
+                echo.
+                echo Ports en écoute:
+                netstat -an | find "4200" || echo Port 4200 non trouvé
+                echo.
+                echo Contenu du répertoire robot-tests:
+                if exist robot-tests dir robot-tests
+                echo.
+                echo === FIN DIAGNOSTIC ===
+            '''
         }
     }
 }
