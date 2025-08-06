@@ -37,6 +37,133 @@ pipeline {
             }
         }
         
+        stage('Build Angular Application') {
+            steps {
+                bat 'call npm run build'
+            }
+        }
+        
+        stage('Start Angular Application') {
+            steps {
+                // Démarrer l'application Angular en arrière-plan de façon plus robuste
+                bat '''
+                    echo Démarrage de l application Angular...
+                    start "Angular App" /min cmd /c "npm run start"
+                    echo Attente du démarrage de l application...
+                '''
+                
+                // Attendre que l'application soit disponible avec une vérification
+                script {
+                    def maxAttempts = 30
+                    def attempt = 0
+                    def appStarted = false
+                    
+                    while (attempt < maxAttempts && !appStarted) {
+                        try {
+                            sleep(2)
+                            bat 'netstat -an | find "4200" | find "LISTENING"'
+                            appStarted = true
+                            echo "✅ Application Angular démarrée sur le port 4200"
+                        } catch (Exception e) {
+                            attempt++
+                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
+                        }
+                    }
+                    
+                    if (!appStarted) {
+                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
+                    }
+                }
+            }
+        }
+        
+        stage('Setup Robot Framework Environment') {
+            steps {
+                echo "Configuration de l'environnement Robot Framework..."
+                
+                // Créer le répertoire s'il n'existe pas
+                bat '''
+                    if not exist robot-tests mkdir robot-tests
+                    cd robot-tests
+                '''
+                
+                // Créer l'environnement virtuel
+                bat '''
+                    cd robot-tests
+                    if exist robot_env rmdir /s /q robot_env
+                    python -m venv robot_env
+                '''
+                
+                // Mettre à jour pip et installer les dépendances
+                bat '''
+                    cd robot-tests
+                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip
+                    robot_env\\Scripts\\pip install robotframework
+                    robot_env\\Scripts\\pip install robotframework-seleniumlibrary
+                    robot_env\\Scripts\\pip install selenium
+                    robot_env\\Scripts\\pip install webdriver-manager
+                '''
+                
+                echo "✅ Environnement Robot Framework configuré"
+            }
+        }
+        
+        stage('Verify Application Status') {
+            steps {
+                echo "Vérification du statut de l'application..."
+                bat '''
+                    echo État des processus Node.js:
+                    tasklist | find "node.exe" || echo Aucun processus Node.js trouvé
+                    echo.
+                    echo Ports en écoute:
+                    netstat -an | find "4200" || echo Port 4200 non trouvé
+                    echo.
+                    echo Test de connectivité HTTP:
+                    curl -f http://localhost:4200 || echo Connexion échouée
+                '''
+            }
+        }
+        
+        stage('Run Robot Framework tests') {
+            steps {
+                echo "Exécution des tests Robot Framework..."
+                
+                // Exécuter les tests
+                bat '''
+                    cd robot-tests
+                    robot_env\\Scripts\\robot --outputdir . ^
+                                              --variable BROWSER:headlesschrome ^
+                                              --variable URL:http://localhost:4200 ^
+                                              --loglevel INFO ^
+                                              hello.robot
+                '''
+            }
+            post {
+                always {
+                    // Arrêter l'application Angular après les tests
+                    script {
+                        try {
+                            bat 'taskkill /f /im "node.exe" 2>nul || echo "Aucun processus Node.js à arrêter"'
+                            echo "✅ Application Angular arrêtée"
+                        } catch (Exception e) {
+                            echo "Avertissement lors de l'arrêt de l'application: ${e.getMessage()}"
+                        }
+                    }
+                    // Archiver les résultats des tests Robot Framework
+                    archiveArtifacts artifacts: 'robot-tests/*.html,robot-tests/*.xml,robot-tests/log.html,robot-tests/report.html', allowEmptyArchive: true
+                    // Publier les résultats des tests
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: false,
+                        keepAll: true,
+                        reportDir: 'robot-tests',
+                        reportFiles: 'report.html',
+                        reportName: 'Robot Framework Test Report'
+                    ])
+                }
+            }
+        }
+        
         stage('Docker Build & Push') {
             steps {
                 script {
@@ -253,105 +380,16 @@ spec:
                 '''
             }
         }
-        
-        stage('Verify Application Status') {
-            steps {
-                script {
-                    // Wait for application to be accessible via the domain
-                    def maxAttempts = 30
-                    def attempt = 0
-                    def appStarted = false
-                    while (attempt < maxAttempts && !appStarted) {
-                        try {
-                            sleep(10)
-                            // Try to access the application via HTTP
-                            powershell '''
-                                $response = Invoke-WebRequest -Uri "http://$env:DOMAIN_NAME" -UseBasicParsing -TimeoutSec 10
-                                if ($response.StatusCode -eq 200) {
-                                    Write-Host "Application is accessible at http://$env:DOMAIN_NAME"
-                                    exit 0
-                                } else {
-                                    Write-Host "Application returned status code: $($response.StatusCode)"
-                                    exit 1
-                                }
-                            '''
-                            appStarted = true
-                        } catch (Exception e) {
-                            attempt++
-                            if (attempt % 5 == 0) {
-                                echo "Waiting for application to be accessible... (${attempt}/${maxAttempts})"
-                            }
-                        }
-                    }
-                    if (!appStarted) {
-                        error("Application is not accessible after ${maxAttempts} attempts")
-                    }
-                }
-            }
-        }
-        
-        stage('Setup Robot Framework Environment') {
-            steps {
-                bat '''
-                    if not exist robot-tests mkdir robot-tests
-                    cd robot-tests
-                    if exist robot_env rmdir /s /q robot_env
-                    python -m venv robot_env
-                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip --quiet
-                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager --quiet
-                '''
-            }
-        }
-        
-        stage('Run Robot Framework Tests') {
-            steps {
-                script {
-                    try {
-                        bat '''
-                            cd robot-tests
-                            robot_env\\Scripts\\robot --outputdir results ^
-                                                      --variable BROWSER:headlesschrome ^
-                                                      --variable URL:http://%DOMAIN_NAME% ^
-                                                      --loglevel INFO ^
-                                                      hello.robot
-                        '''
-                    } catch (Exception e) {
-                        currentBuild.result = 'UNSTABLE'
-                        echo "Robot Framework tests failed: ${e.getMessage()}"
-                    }
-                }
-            }
-            post {
-                always {
-                    // Archive Robot Framework results
-                    archiveArtifacts artifacts: 'robot-tests/results/*', allowEmptyArchive: true
-                    
-                    // Publish test results if available
-                    script {
-                        try {
-                            publishHTML([
-                                allowMissing: false,
-                                alwaysLinkToLastBuild: true,
-                                keepAll: true,
-                                reportDir: 'robot-tests/results',
-                                reportFiles: 'report.html',
-                                reportName: 'Robot Framework Report'
-                            ])
-                        } catch (Exception e) {
-                            echo "Could not publish Robot Framework report: ${e.getMessage()}"
-                        }
-                    }
-                }
-            }
-        }
     }
     
     post {
         always {
             script {
                 try {
+                    // Nettoyer les processus Node.js restants
+                    bat 'taskkill /f /im "node.exe" 2>nul || echo "Aucun processus Node.js à arrêter"'
                     bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
-                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,k8s-all.yaml,robot-tests/results/**', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,k8s-all.yaml,robot-tests/*.html,robot-tests/*.xml', allowEmptyArchive: true
                 } catch (Exception e) {
                     echo "Cleanup warnings"
                 }
@@ -359,15 +397,11 @@ spec:
         }
         
         success {
-            echo "✅ Deployment and tests successful! App available at: http://${DOMAIN_NAME}"
+            echo "✅ Deployment successful! App available at: http://${DOMAIN_NAME}"
         }
         
         failure {
             echo "❌ Pipeline failed! Check logs and verify: Azure credentials, Docker Hub access, DuckDNS token"
-        }
-        
-        unstable {
-            echo "⚠️ Pipeline completed but Robot Framework tests failed. Check test reports for details."
         }
     }
 }
