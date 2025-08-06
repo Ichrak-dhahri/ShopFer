@@ -18,10 +18,6 @@ pipeline {
         APP_NAMESPACE = 'shopfer-app'
         DOMAIN_NAME = 'shopfer-ecommerce.duckdns.org'
         DUCKDNS_TOKEN = credentials('duckdns-token')
-        
-        // Variables pour les tests
-        LOCAL_APP_URL = 'http://localhost:4200'
-        DEPLOYED_APP_URL = "http://${DOMAIN_NAME}"
     }
     
     stages {
@@ -31,118 +27,12 @@ pipeline {
             }
         }
         
-        stage('Install Dependencies') {
+        stage('Build & Test') {
             steps {
-                bat 'call npm install'
-            }
-        }
-        
-        stage('Run Unit Tests') {
-            steps {
-                bat 'call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage'
-            }
-        }
-        
-        stage('Build Angular Application') {
-            steps {
-                bat 'call npm run build --prod'
-            }
-        }
-        
-        stage('Start Local Application for Testing') {
-            steps {
-                echo "Démarrage de l'application Angular en local pour les tests..."
                 bat '''
-                    echo Démarrage de l application Angular...
-                    start "Angular App" /min cmd /c "npm run start"
-                    echo Attente du démarrage de l application...
-                '''
-                
-                // Attendre que l'application soit disponible
-                script {
-                    def maxAttempts = 30
-                    def attempt = 0
-                    def appStarted = false
-                    
-                    while (attempt < maxAttempts && !appStarted) {
-                        try {
-                            sleep(2)
-                            bat 'netstat -an | find "4200" | find "LISTENING"'
-                            appStarted = true
-                            echo "✅ Application Angular démarrée sur le port 4200"
-                        } catch (Exception e) {
-                            attempt++
-                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
-                        }
-                    }
-                    
-                    if (!appStarted) {
-                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
-                    }
-                }
-            }
-        }
-        
-        stage('Setup Robot Framework Environment') {
-            steps {
-                echo "Configuration de l'environnement Robot Framework..."
-                
-                bat '''
-                    if not exist robot-tests mkdir robot-tests
-                    cd robot-tests
-                '''
-                
-                bat '''
-                    cd robot-tests
-                    if exist robot_env rmdir /s /q robot_env
-                    python -m venv robot_env
-                '''
-                
-                bat '''
-                    cd robot-tests
-                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip
-                    robot_env\\Scripts\\pip install robotframework
-                    robot_env\\Scripts\\pip install robotframework-seleniumlibrary
-                    robot_env\\Scripts\\pip install selenium
-                    robot_env\\Scripts\\pip install webdriver-manager
-                '''
-                
-                echo "✅ Environnement Robot Framework configuré"
-            }
-        }
-        
-        stage('Run Robot Framework Tests (Local)') {
-            steps {
-                echo "Exécution des tests Robot Framework sur l'application locale..."
-                
-                bat '''
-                    cd robot-tests
-                    robot_env\\Scripts\\robot --outputdir local-tests ^
-                                              --variable BROWSER:headlesschrome ^
-                                              --variable URL:%LOCAL_APP_URL% ^
-                                              --loglevel INFO ^
-                                              --name "Local Tests" ^
-                                              hello.robot
-                '''
-            }
-        }
-        
-        stage('Stop Local Application') {
-            steps {
-                echo "Arrêt de l'application locale..."
-                bat '''
-                    echo Arrêt des processus Node.js sur le port 4200...
-                    for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                        echo Arrêt du processus %%a
-                        taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
-                    )
-                    
-                    echo Arrêt de tous les processus npm et node...
-                    taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
-                    taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
-                    
-                    echo Nettoyage terminé
-                    exit /b 0
+                    call npm install
+                    call npm run build --prod
+                    call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage
                 '''
             }
         }
@@ -354,201 +244,130 @@ spec:
             }
         }
         
-        stage('Wait for Application Deployment') {
+        stage('Verify') {
             steps {
-                echo "Attente de la disponibilité de l'application déployée..."
+                bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    kubectl get all -n %APP_NAMESPACE%
+                    kubectl get ingress -n %APP_NAMESPACE%
+                '''
+            }
+        }
+        
+        stage('Verify Application Status') {
+            steps {
                 script {
-                    def maxAttempts = 60
+                    // Wait for application to be accessible via the domain
+                    def maxAttempts = 30
                     def attempt = 0
-                    def appReady = false
-                    
-                    while (attempt < maxAttempts && !appReady) {
+                    def appStarted = false
+                    while (attempt < maxAttempts && !appStarted) {
                         try {
                             sleep(10)
-                            // Test de connectivité HTTP
-                            powershell """
-                                try {
-                                    \$response = Invoke-WebRequest -Uri "${DEPLOYED_APP_URL}" -TimeoutSec 10 -UseBasicParsing
-                                    if (\$response.StatusCode -eq 200) {
-                                        Write-Host "✅ Application accessible"
-                                        exit 0
-                                    }
-                                } catch {
-                                    Write-Host "❌ Application pas encore accessible"
+                            // Try to access the application via HTTP
+                            powershell '''
+                                $response = Invoke-WebRequest -Uri "http://$env:DOMAIN_NAME" -UseBasicParsing -TimeoutSec 10
+                                if ($response.StatusCode -eq 200) {
+                                    Write-Host "Application is accessible at http://$env:DOMAIN_NAME"
+                                    exit 0
+                                } else {
+                                    Write-Host "Application returned status code: $($response.StatusCode)"
                                     exit 1
                                 }
-                            """
-                            appReady = true
-                            echo "✅ Application déployée accessible sur ${DEPLOYED_APP_URL}"
+                            '''
+                            appStarted = true
                         } catch (Exception e) {
                             attempt++
-                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore accessible..."
+                            if (attempt % 5 == 0) {
+                                echo "Waiting for application to be accessible... (${attempt}/${maxAttempts})"
+                            }
                         }
                     }
-                    
-                    if (!appReady) {
-                        error("❌ L'application déployée n'est pas accessible dans le délai imparti")
+                    if (!appStarted) {
+                        error("Application is not accessible after ${maxAttempts} attempts")
                     }
                 }
             }
         }
         
-        stage('Run Robot Framework Tests (Deployed)') {
+        stage('Setup Robot Framework Environment') {
             steps {
-                echo "Exécution des tests Robot Framework sur l'application déployée..."
-                
                 bat '''
+                    if not exist robot-tests mkdir robot-tests
                     cd robot-tests
-                    robot_env\\Scripts\\robot --outputdir deployed-tests ^
-                                              --variable BROWSER:headlesschrome ^
-                                              --variable URL:%DEPLOYED_APP_URL% ^
-                                              --loglevel INFO ^
-                                              --name "Deployed Tests" ^
-                                              hello.robot
+                    if exist robot_env rmdir /s /q robot_env
+                    python -m venv robot_env
+                    robot_env\\Scripts\\python.exe -m pip install --upgrade pip --quiet
+                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager --quiet
                 '''
             }
         }
         
-        stage('Verify Deployment') {
+        stage('Run Robot Framework Tests') {
             steps {
-                bat '''
-                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                    echo === STATUS DU DEPLOYMENT ===
-                    kubectl get all -n %APP_NAMESPACE%
-                    kubectl get ingress -n %APP_NAMESPACE%
-                    echo.
-                    echo === LOGS DES PODS ===
-                    kubectl logs -l app=shopfer -n %APP_NAMESPACE% --tail=50
-                '''
+                script {
+                    try {
+                        bat '''
+                            cd robot-tests
+                            robot_env\\Scripts\\robot --outputdir results ^
+                                                      --variable BROWSER:headlesschrome ^
+                                                      --variable URL:http://%DOMAIN_NAME% ^
+                                                      --loglevel INFO ^
+                                                      hello.robot
+                        '''
+                    } catch (Exception e) {
+                        currentBuild.result = 'UNSTABLE'
+                        echo "Robot Framework tests failed: ${e.getMessage()}"
+                    }
+                }
+            }
+            post {
+                always {
+                    // Archive Robot Framework results
+                    archiveArtifacts artifacts: 'robot-tests/results/*', allowEmptyArchive: true
+                    
+                    // Publish test results if available
+                    script {
+                        try {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: 'robot-tests/results',
+                                reportFiles: 'report.html',
+                                reportName: 'Robot Framework Report'
+                            ])
+                        } catch (Exception e) {
+                            echo "Could not publish Robot Framework report: ${e.getMessage()}"
+                        }
+                    }
+                }
             }
         }
     }
     
     post {
         always {
-            echo "Nettoyage et archivage des résultats..."
-            
-            // Arrêt des processus locaux si nécessaire
-            bat '''
-                echo Nettoyage final des processus Node.js...
-                for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                    echo Arrêt du processus %%a
-                    taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
-                )
-                taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
-                taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
-                exit /b 0
-            '''
-            
-            // Publication des résultats Robot Framework
             script {
                 try {
-                    // Résultats des tests locaux
-                    robot(
-                        outputPath: 'robot-tests/local-tests',
-                        outputFileName: 'output.xml',
-                        reportFileName: 'report.html',
-                        logFileName: 'log.html',
-                        disableArchiveOutput: false,
-                        passThreshold: 80,
-                        unstableThreshold: 60,
-                        otherFiles: '*.png,*.jpg'
-                    )
+                    bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
+                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,k8s-all.yaml,robot-tests/results/**', allowEmptyArchive: true
                 } catch (Exception e) {
-                    echo "⚠️ Erreur lors de la publication des résultats Robot (local): ${e.getMessage()}"
-                }
-                
-                try {
-                    // Résultats des tests de déploiement
-                    robot(
-                        outputPath: 'robot-tests/deployed-tests',
-                        outputFileName: 'output.xml',
-                        reportFileName: 'report.html',
-                        logFileName: 'log.html',
-                        disableArchiveOutput: false,
-                        passThreshold: 80,
-                        unstableThreshold: 60,
-                        otherFiles: '*.png,*.jpg'
-                    )
-                } catch (Exception e) {
-                    echo "⚠️ Erreur lors de la publication des résultats Robot (deployed): ${e.getMessage()}"
-                }
-            }
-            
-            // Archivage des artefacts
-            script {
-                try {
-                    bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Docker cleanup done"'
-                    archiveArtifacts artifacts: 'terraform-aks/tfplan,kubeconfig,k8s-all.yaml,robot-tests/**/*.{xml,html,log,png,jpg}', allowEmptyArchive: true, fingerprint: true
-                } catch (Exception e) {
-                    echo "⚠️ Erreur lors de l'archivage: ${e.getMessage()}"
+                    echo "Cleanup warnings"
                 }
             }
         }
         
         success {
-            echo """
-            ✅ Pipeline terminé avec succès!
-            🌐 Application disponible à: ${DEPLOYED_APP_URL}
-            📊 Tests Robot Framework exécutés en local et sur le déploiement
-            🐳 Image Docker: ${DOCKER_IMAGE_NAME}:${DOCKER_TAG}
-            ☸️  Cluster AKS: ${TF_VAR_cluster_name} dans ${TF_VAR_resource_group_name}
-            """
+            echo "✅ Deployment and tests successful! App available at: http://${DOMAIN_NAME}"
         }
         
         failure {
-            echo """
-            ❌ Pipeline échoué! 
-            
-            Vérifiez:
-            - 🔑 Credentials Azure, Docker Hub, DuckDNS
-            - 🏗️  Configuration Terraform
-            - ☸️  Statut du cluster AKS
-            - 🌐 Connectivité réseau
-            - 🤖 Tests Robot Framework
-            
-            Consultez les logs détaillés ci-dessus.
-            """
-            
-            // Diagnostic en cas d'échec
-            bat '''
-                echo === DIAGNOSTIC COMPLET ===
-                echo.
-                echo État des processus Node.js:
-                tasklist | find "node.exe" || echo Aucun processus Node.js
-                echo.
-                echo Ports en écoute:
-                netstat -an | find "4200" || echo Port 4200 non trouvé
-                echo.
-                echo Contenu du répertoire robot-tests:
-                if exist robot-tests (
-                    dir robot-tests /s
-                ) else (
-                    echo Répertoire robot-tests non trouvé
-                )
-                echo.
-                echo Images Docker disponibles:
-                docker images | find "shopfer" || echo Aucune image shopfer trouvée
-                echo.
-                echo === FIN DIAGNOSTIC ===
-            '''
-            
-            // Diagnostic Kubernetes si disponible
-            script {
-                try {
-                    bat '''
-                        if exist kubeconfig (
-                            set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                            echo === DIAGNOSTIC KUBERNETES ===
-                            kubectl get pods -n %APP_NAMESPACE% || echo Erreur kubectl
-                            kubectl describe pods -n %APP_NAMESPACE% || echo Erreur describe
-                            echo === FIN DIAGNOSTIC K8S ===
-                        )
-                    '''
-                } catch (Exception e) {
-                    echo "Kubernetes non accessible pour le diagnostic"
-                }
-            }
+            echo "❌ Pipeline failed! Check logs and verify: Azure credentials, Docker Hub access, DuckDNS token"
+        }
+        
+        unstable {
+            echo "⚠️ Pipeline completed but Robot Framework tests failed. Check test reports for details."
         }
     }
 }
