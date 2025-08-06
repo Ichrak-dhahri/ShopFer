@@ -6,6 +6,10 @@ pipeline {
         DOCKER_IMAGE_NAME = 'farahabbes/shopferimgg'
         DOCKER_TAG = "${BUILD_NUMBER}"
         
+        // Variables pour AKS existant
+        RESOURCE_GROUP_NAME = 'rg-shopfer-aks'
+        CLUSTER_NAME = 'aks-shopfer'
+        
         APP_NAMESPACE = 'shopfer-app'
         DOMAIN_NAME = 'shopfer-ecommerce.duckdns.org'
         DUCKDNS_TOKEN = credentials('duckdns-token')
@@ -128,9 +132,27 @@ pipeline {
             }
         }
         
+        stage('Connect to Existing AKS') {
+            steps {
+                withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
+                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID',
+                    clientIdVariable: 'ARM_CLIENT_ID',
+                    clientSecretVariable: 'ARM_CLIENT_SECRET',
+                    tenantIdVariable: 'ARM_TENANT_ID')]) {
+                    
+                    bat '''
+                        az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
+                        az account set --subscription %ARM_SUBSCRIPTION_ID%
+                        az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing
+                    '''
+                }
+            }
+        }
+        
         stage('Setup K8s & NGINX') {
             steps {
                 bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     kubectl cluster-info
                     kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
                     kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
@@ -142,6 +164,7 @@ pipeline {
         stage('Clean & Deploy App') {
             steps {
                 powershell '''
+                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
                     kubectl delete ingress,deployment,service -l app=shopfer -n $env:APP_NAMESPACE --ignore-not-found=true
                     Start-Sleep 10
                 '''
@@ -222,6 +245,7 @@ spec:
 """
                 
                 bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     kubectl apply -f k8s-all.yaml
                     kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=300s
                 '''
@@ -231,6 +255,8 @@ spec:
         stage('Configure DNS') {
             steps {
                 powershell '''
+                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
+                    
                     $timeout = 600; $counter = 0; $externalIP = $null
                     do {
                         if ($counter -ge $timeout) { break }
@@ -252,6 +278,7 @@ spec:
         stage('Verify') {
             steps {
                 bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     kubectl get all -n %APP_NAMESPACE%
                     kubectl get ingress -n %APP_NAMESPACE%
                 '''
@@ -278,7 +305,7 @@ spec:
                 }
                 
                 try {
-                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},k8s-all.yaml', allowEmptyArchive: true, fingerprint: true
+                    archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},kubeconfig,k8s-all.yaml', allowEmptyArchive: true, fingerprint: true
                 } catch (Exception e) {
                     // Archive failed
                 }
@@ -292,7 +319,7 @@ spec:
         }
         
         failure {
-            echo "❌ Pipeline failed! Check: Docker Hub, DuckDNS token"
+            echo "❌ Pipeline failed! Check: Azure credentials, Docker Hub, DuckDNS token"
             bat '''
                 tasklist | find "node.exe" || echo No Node process
                 netstat -an | find "4200" || echo Port 4200 not found
