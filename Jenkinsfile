@@ -45,14 +45,10 @@ pipeline {
         
         stage('Start Angular Application') {
             steps {
-                // Démarrer l'application Angular en arrière-plan de façon plus robuste
                 bat '''
-                    echo Démarrage de l application Angular...
                     start "Angular App" /min cmd /c "npm run start"
-                    echo Attente du démarrage de l application...
                 '''
                 
-                // Attendre que l'application soit disponible avec une vérification
                 script {
                     def maxAttempts = 30
                     def attempt = 0
@@ -63,15 +59,13 @@ pipeline {
                             sleep(2)
                             bat 'netstat -an | find "4200" | find "LISTENING"'
                             appStarted = true
-                            echo "✅ Application Angular démarrée sur le port 4200"
                         } catch (Exception e) {
                             attempt++
-                            echo "Tentative ${attempt}/${maxAttempts} - Application pas encore prête..."
                         }
                     }
                     
                     if (!appStarted) {
-                        error("❌ L'application Angular n'a pas pu démarrer dans le délai imparti")
+                        error("Application Angular n'a pas démarré")
                     }
                 }
             }
@@ -79,56 +73,29 @@ pipeline {
         
         stage('Setup Robot Framework Environment') {
             steps {
-                echo "Configuration de l'environnement Robot Framework..."
-                
-                // Créer le répertoire s'il n'existe pas
                 bat '''
                     if not exist robot-tests mkdir robot-tests
                     cd robot-tests
-                '''
-                
-                // Créer l'environnement virtuel
-                bat '''
-                    cd robot-tests
                     if exist robot_env rmdir /s /q robot_env
                     python -m venv robot_env
-                '''
-                
-                // Mettre à jour pip et installer les dépendances
-                bat '''
-                    cd robot-tests
                     robot_env\\Scripts\\python.exe -m pip install --upgrade pip
-                    robot_env\\Scripts\\pip install robotframework
-                    robot_env\\Scripts\\pip install robotframework-seleniumlibrary
-                    robot_env\\Scripts\\pip install selenium
-                    robot_env\\Scripts\\pip install webdriver-manager
+                    robot_env\\Scripts\\pip install robotframework robotframework-seleniumlibrary selenium webdriver-manager
                 '''
-                
-                echo "✅ Environnement Robot Framework configuré"
             }
         }
         
         stage('Verify Application Status') {
             steps {
-                echo "Vérification du statut de l'application..."
                 bat '''
-                    echo État des processus Node.js:
-                    tasklist | find "node.exe" || echo Aucun processus Node.js trouvé
-                    echo.
-                    echo Ports en écoute:
-                    netstat -an | find "4200" || echo Port 4200 non trouvé
-                    echo.
-                    echo Test de connectivité HTTP:
-                    curl -f http://localhost:4200 || echo Connexion échouée
+                    tasklist | find "node.exe" || echo No Node process
+                    netstat -an | find "4200" || echo Port 4200 not found
+                    curl -f http://localhost:4200 || echo Connection failed
                 '''
             }
         }
         
         stage('Run Robot Framework tests') {
             steps {
-                echo "Exécution des tests Robot Framework..."
-                
-                // Exécuter les tests
                 bat '''
                     cd robot-tests
                     robot_env\\Scripts\\robot --outputdir . ^
@@ -142,21 +109,10 @@ pipeline {
         
         stage('Stop Angular Application') {
             steps {
-                echo "Arrêt de l'application Angular..."
-                
-                // Arrêter l'application Angular de façon plus robuste
                 bat '''
-                    echo Arrêt des processus Node.js sur le port 4200...
-                    for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do (
-                        echo Arrêt du processus %%a
-                        taskkill /f /pid %%a 2>nul || echo Processus %%a déjà arrêté
-                    )
-                    
-                    echo Arrêt de tous les processus npm et node...
-                    taskkill /f /im node.exe 2>nul || echo Aucun processus node.exe
-                    taskkill /f /im npm.cmd 2>nul || echo Aucun processus npm.cmd
-                    
-                    echo Nettoyage terminé
+                    for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
+                    taskkill /f /im node.exe 2>nul
+                    taskkill /f /im npm.cmd 2>nul
                     exit /b 0
                 '''
             }
@@ -211,22 +167,14 @@ pipeline {
                             terraform validate
                         '''
                         
-                        // Import existing resources
                         try {
                             bat '''
                                 cd terraform-aks
-                                az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
-                                if %ERRORLEVEL% EQU 0 (
-                                    terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%" || echo "RG import failed"
-                                )
-                                
-                                az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1
-                                if %ERRORLEVEL% EQU 0 (
-                                    terraform import azurerm_kubernetes_cluster.aks "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%/providers/Microsoft.ContainerService/managedClusters/%TF_VAR_cluster_name%" || echo "AKS import failed"
-                                )
+                                az group show --name %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1 && terraform import azurerm_resource_group.aks_rg "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%"
+                                az aks show --name %TF_VAR_cluster_name% --resource-group %TF_VAR_resource_group_name% --subscription %ARM_SUBSCRIPTION_ID% >nul 2>&1 && terraform import azurerm_kubernetes_cluster.aks "/subscriptions/%ARM_SUBSCRIPTION_ID%/resourceGroups/%TF_VAR_resource_group_name%/providers/Microsoft.ContainerService/managedClusters/%TF_VAR_cluster_name%"
                             '''
                         } catch (Exception e) {
-                            echo "Import warnings: ${e.getMessage()}"
+                            // Import warnings ignored
                         }
                         
                         bat '''
@@ -260,7 +208,6 @@ pipeline {
                     Start-Sleep 10
                 '''
                 
-                // Create manifests
                 writeFile file: 'k8s-all.yaml', text: """
 apiVersion: apps/v1
 kind: Deployment
@@ -354,7 +301,6 @@ spec:
                         if ($counter -ge $timeout) { break }
                         $externalIP = kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>$null
                         if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") {
-                            Write-Host "External IP: $externalIP"
                             break
                         }
                         Start-Sleep 10; $counter += 10
@@ -363,7 +309,6 @@ spec:
                     if ($externalIP) {
                         $uri = "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
                         Invoke-RestMethod -Uri $uri
-                        Write-Host "DNS configured for $env:DOMAIN_NAME -> $externalIP"
                     }
                 '''
             }
@@ -384,7 +329,6 @@ spec:
         always {
             script {
                 try {
-                    // Publication des résultats Robot Framework avec gestion d'erreur
                     robot(
                         outputPath: 'robot-tests',
                         outputFileName: 'output.xml',
@@ -396,43 +340,29 @@ spec:
                         otherFiles: '*.png,*.jpg'
                     )
                 } catch (Exception e) {
-                    echo "⚠️ Erreur lors de la publication des résultats Robot: ${e.getMessage()}"
+                    // Robot results publication failed
                 }
                 
-                // Archiver les artefacts
                 try {
                     archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},terraform-aks/tfplan,kubeconfig,k8s-all.yaml', allowEmptyArchive: true, fingerprint: true
                 } catch (Exception e) {
-                    echo "⚠️ Erreur lors de l'archivage: ${e.getMessage()}"
+                    // Archive failed
                 }
                 
-                // Nettoyage Docker
                 bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || echo "Cleanup done"'
             }
         }
         
         success {
-            echo "✅ Pipeline terminé avec succès!"
-            echo "✅ Tests Robot Framework exécutés"
-            echo "✅ Deployment successful! App available at: http://${DOMAIN_NAME}"
+            echo "✅ Pipeline successful! App: http://${DOMAIN_NAME}"
         }
         
         failure {
-            echo "❌ Pipeline échoué! Check logs and verify: Azure credentials, Docker Hub access, DuckDNS token"
-            
-            // Diagnostic en cas d'échec
+            echo "❌ Pipeline failed! Check: Azure credentials, Docker Hub, DuckDNS token"
             bat '''
-                echo === DIAGNOSTIC ===
-                echo État des processus Node.js:
-                tasklist | find "node.exe" || echo Aucun processus Node.js
-                echo.
-                echo Ports en écoute:
-                netstat -an | find "4200" || echo Port 4200 non trouvé
-                echo.
-                echo Contenu du répertoire robot-tests:
+                tasklist | find "node.exe" || echo No Node process
+                netstat -an | find "4200" || echo Port 4200 not found
                 if exist robot-tests dir robot-tests
-                echo.
-                echo === FIN DIAGNOSTIC ===
             '''
         }
     }
