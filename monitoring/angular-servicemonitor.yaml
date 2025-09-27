@@ -1,0 +1,69 @@
+# ServiceMonitor corrigé pour votre application Angular
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: angular-app-monitor
+  namespace: monitoring  # ← CHANGÉ: doit être dans le même namespace que Prometheus
+  labels:
+    app: angular-app
+    release: kube-prom-stack  # TRÈS IMPORTANT - doit correspondre au release Helm
+spec:
+  jobLabel: app  # ← AJOUTÉ: utilise le label "app" pour nommer le job
+  selector:
+    matchLabels:
+      app: angular-app  # Doit correspondre aux labels de votre service Angular
+  endpoints:
+  - port: http  # Nom du port dans votre service Angular
+    interval: 30s
+    path: /  # Changé de /metrics à / car Angular n'expose pas /metrics par défaut
+    scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+    - default  # ← Prometheus va scraper les services dans le namespace "default"
+
+---
+# Service pour exposer votre application Angular (dans default)
+apiVersion: v1
+kind: Service
+metadata:
+  name: angular-app-service
+  namespace: default  # ← Le service reste dans default
+  labels:
+    app: angular-app
+spec:
+  selector:
+    app: angular-app-nonexistent  # ← CHANGÉ: sélecteur invalide pour simuler un service down
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  type: ClusterIP
+
+---
+# Création d'un pod Angular bidon qui va crasher (dans default)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: angular-app-crasher
+  namespace: default  # ← Dans le namespace default
+  labels:
+    app: angular-app  # ← Labels correspondant au service
+spec:
+  containers:
+  - name: crasher
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Pod Angular simulation démarré"
+      echo "Va crasher dans 20 secondes..."
+      sleep 20
+      echo "CRASH pour test AlertManager"
+      exit 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+  restartPolicy: Always  # Redémarre = crash loop

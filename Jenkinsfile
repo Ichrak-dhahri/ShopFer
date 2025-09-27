@@ -91,27 +91,30 @@ pipeline {
             }
         }
         
-        stage('AKS Connection & Setup') {
-            steps {
-                withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
-                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID', clientIdVariable: 'ARM_CLIENT_ID',
-                    clientSecretVariable: 'ARM_CLIENT_SECRET', tenantIdVariable: 'ARM_TENANT_ID')]) {
-                    
-                    bat '''
-                        az login --service-principal -u %ARM_CLIENT_ID% -p %ARM_CLIENT_SECRET% --tenant %ARM_TENANT_ID%
-                        az account set --subscription %ARM_SUBSCRIPTION_ID%
-                        az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing
-                    '''
-                }
-                
-                bat '''
-                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
-                    kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
-                    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
-                    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-                '''
-            }
+      stage('AKS Connection & Setup') {
+    steps {
+        withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
+            subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID', clientIdVariable: 'ARM_CLIENT_ID',
+            clientSecretVariable: 'ARM_CLIENT_SECRET', tenantIdVariable: 'ARM_TENANT_ID')]) {
+            
+            bat '''
+                echo "Connexion à Azure avec Service Principal..."
+                az login --service-principal --username %ARM_CLIENT_ID% --password="%ARM_CLIENT_SECRET%" --tenant %ARM_TENANT_ID%
+                echo "Configuration de la subscription..."
+                az account set --subscription %ARM_SUBSCRIPTION_ID%
+                echo "Récupération des credentials AKS..."
+                az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing
+            '''
         }
+        
+        bat '''
+            set KUBECONFIG=%WORKSPACE%\\kubeconfig
+            kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
+            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+            kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+        '''
+    }
+}
         
         stage('Deploy Application') {
             steps {

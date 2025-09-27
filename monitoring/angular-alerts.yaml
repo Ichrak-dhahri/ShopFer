@@ -1,0 +1,54 @@
+# Créez ce fichier : angular-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: angular-app-alerts
+  namespace: monitoring
+  labels:
+    app: angular-app
+    release: kube-prom-stack  # Important pour que Prometheus le détecte
+spec:
+  groups:
+  - name: angular-app.rules
+    rules:
+
+    # Alerte si l'application est down
+    - alert: AngularAppDown
+      expr: up{job="angular-app"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Angular application is down"
+        description: "Angular application has been down for more than 1 minute"
+
+    # Alerte si les pods ne sont pas ready
+    - alert: AngularPodsNotReady
+      expr: kube_deployment_status_replicas_unavailable{deployment="angular-app"} > 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Angular pods not ready"
+        description: "{{ $value }} Angular pods are not ready"
+
+    # Alerte si usage CPU élevé
+    - alert: AngularHighCPU
+      expr: rate(container_cpu_usage_seconds_total{pod=~"angular-app-.*"}[5m]) * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage on Angular pods"
+        description: "CPU usage is above 80% for more than 5 minutes"
+
+    # Alerte si usage mémoire élevé
+    - alert: AngularHighMemory
+      expr: (container_memory_usage_bytes{pod=~"angular-app-.*"} / container_spec_memory_limit_bytes{pod=~"angular-app-.*"}) * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage on Angular pods"
+        description: "Memory usage is above 85% for more than 5 minutes"
+

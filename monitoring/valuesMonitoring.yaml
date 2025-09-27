@@ -1,0 +1,32 @@
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: "FarahCapGemini123."  # Ajoutez un mot de passe fort !
+  service:
+    type: LoadBalancer
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: "managed-csi"  # Classe de stockage pour AKS
+
+prometheus:
+  prometheusSpec:
+    retention: "15d"
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: "managed-csi"  # Classe de stockage pour AKS
+          resources:
+            requests:
+              storage: 20Gi
+
+# Configuration additionnelle pour AKS
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: "managed-csi"
+          resources:
+            requests:
+              storage: 5Gi
