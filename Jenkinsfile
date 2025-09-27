@@ -91,37 +91,61 @@ pipeline {
             }
         }
         
-      stage('AKS Connection & Setup') {
-    steps {
-        withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
-            subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID', clientIdVariable: 'ARM_CLIENT_ID',
-            clientSecretVariable: 'ARM_CLIENT_SECRET', tenantIdVariable: 'ARM_TENANT_ID')]) {
-            
-            bat '''
-                echo "Connexion à Azure avec Service Principal..."
-                az login --service-principal --username %ARM_CLIENT_ID% --password="%ARM_CLIENT_SECRET%" --tenant %ARM_TENANT_ID%
-                echo "Configuration de la subscription..."
-                az account set --subscription %ARM_SUBSCRIPTION_ID%
-                echo "Récupération des credentials AKS..."
-                az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing
-            '''
+        stage('AKS Connection & Setup') {
+            steps {
+                withCredentials([azureServicePrincipal(credentialsId: 'azure-service-principal', 
+                    subscriptionIdVariable: 'ARM_SUBSCRIPTION_ID', clientIdVariable: 'ARM_CLIENT_ID',
+                    clientSecretVariable: 'ARM_CLIENT_SECRET', tenantIdVariable: 'ARM_TENANT_ID')]) {
+                    
+                    bat '''
+                        echo "Connexion à Azure avec Service Principal..."
+                        az login --service-principal --username %ARM_CLIENT_ID% --password="%ARM_CLIENT_SECRET%" --tenant %ARM_TENANT_ID%
+                        echo "Configuration de la subscription..."
+                        az account set --subscription %ARM_SUBSCRIPTION_ID%
+                        echo "Vérification des credentials AKS..."
+                        az aks list --resource-group %RESOURCE_GROUP_NAME% --output table
+                        echo "Récupération des credentials AKS avec admin access..."
+                        az aks get-credentials --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --file kubeconfig --overwrite-existing --admin
+                        echo "Vérification du fichier kubeconfig créé..."
+                        if exist kubeconfig (echo Kubeconfig créé avec succès) else (echo ERREUR: Kubeconfig non créé && exit /b 1)
+                    '''
+                }
+                
+                bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    echo "=== Vérifications kubectl ==="
+                    echo "Test de connexion kubectl..."
+                    kubectl version --client
+                    kubectl cluster-info
+                    echo "Vérification des noeuds..."
+                    kubectl get nodes
+                    
+                    echo "=== Configuration namespace ==="
+                    kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl get namespace %APP_NAMESPACE%
+                    
+                    echo "=== Installation NGINX Ingress Controller ==="
+                    kubectl get namespace ingress-nginx 2>nul || (
+                        echo "Installation du contrôleur ingress..."
+                        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml --validate=false
+                    )
+                    
+                    echo "Attente du déploiement de l'Ingress Controller..."
+                    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=600s --ignore-not-found=true
+                    
+                    echo "=== Vérification de l'état de l'ingress ==="
+                    kubectl get pods -n ingress-nginx
+                    kubectl get svc -n ingress-nginx
+                '''
+            }
         }
-        
-        bat '''
-            set KUBECONFIG=%WORKSPACE%\\kubeconfig
-            kubectl create namespace %APP_NAMESPACE% --dry-run=client -o yaml | kubectl apply -f -
-            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
-            kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-        '''
-    }
-}
         
         stage('Deploy Application') {
             steps {
-                powershell '''
-                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
-                    kubectl delete ingress,deployment,service -l app=shopfer -n $env:APP_NAMESPACE --ignore-not-found=true
-                    Start-Sleep 10
+                bat '''
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    kubectl delete ingress,deployment,service -l app=shopfer -n %APP_NAMESPACE% --ignore-not-found=true
+                    timeout /t 10 /nobreak >nul
                 '''
                 
                 writeFile file: 'k8s-all.yaml', text: """
@@ -157,8 +181,20 @@ spec:
             memory: "128Mi"
             cpu: "100m"
           limits:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 4200
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 4200
+          initialDelaySeconds: 60
+          periodSeconds: 30
 ---
 apiVersion: v1
 kind: Service
@@ -173,6 +209,8 @@ spec:
   ports:
   - port: 80
     targetPort: 4200
+    protocol: TCP
+  type: ClusterIP
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -184,6 +222,8 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
   ingressClassName: nginx
   rules:
@@ -202,31 +242,34 @@ spec:
                 bat '''
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
                     kubectl apply -f k8s-all.yaml
-                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=300s
+                    kubectl rollout status deployment/shopfer-app -n %APP_NAMESPACE% --timeout=600s
+                    kubectl get pods -n %APP_NAMESPACE%
                 '''
             }
         }
         
         stage('DNS & Verification') {
             steps {
-                powershell '''
-                    $env:KUBECONFIG = "$env:WORKSPACE\\kubeconfig"
-                    
-                    $timeout = 600; $counter = 0; $externalIP = $null
-                    do {
-                        if ($counter -ge $timeout) { break }
-                        $externalIP = kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>$null
-                        if ($externalIP -and $externalIP -ne "null" -and $externalIP -ne "") { break }
-                        Start-Sleep 10; $counter += 10
-                    } while ($true)
-                    
-                    if ($externalIP) {
-                        Invoke-RestMethod -Uri "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=$env:DUCKDNS_TOKEN&ip=$externalIP"
-                    }
-                '''
-                
                 bat '''
                     set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    
+                    set counter=0
+                    set timeout=600
+                    set externalIP=
+                    
+                    :loop
+                    if %counter% geq %timeout% goto :end
+                    for /f "tokens=*" %%i in ('kubectl get service ingress-nginx-controller -n ingress-nginx -o jsonpath^="{.status.loadBalancer.ingress[0].ip}" 2^>nul') do set externalIP=%%i
+                    if not "%externalIP%"=="" if not "%externalIP%"=="null" goto :update_dns
+                    timeout /t 10 /nobreak >nul
+                    set /a counter+=10
+                    goto :loop
+                    
+                    :update_dns
+                    curl "https://www.duckdns.org/update?domains=shopfer-ecommerce&token=%DUCKDNS_TOKEN%&ip=%externalIP%"
+                    echo IP externe obtenu: %externalIP%
+                    
+                    :end
                     kubectl get all,ingress -n %APP_NAMESPACE%
                 '''
             }
@@ -242,7 +285,9 @@ spec:
                           unstableThreshold: 60, otherFiles: '*.png,*.jpg')
                     archiveArtifacts artifacts: 'robot-tests/**/*.{xml,html,log,png,jpg},kubeconfig,k8s-all.yaml', 
                                    allowEmptyArchive: true, fingerprint: true
-                } catch (Exception e) { /* Ignore errors */ }
+                } catch (Exception e) { 
+                    echo "Erreur lors de l'archivage: ${e.message}"
+                }
                 
                 bat 'docker rmi %DOCKER_IMAGE_NAME%:%DOCKER_TAG% 2>nul || exit /b 0'
             }
@@ -251,7 +296,22 @@ spec:
         success { echo "✅ Pipeline réussi! App: http://${DOMAIN_NAME}" }
         failure { 
             echo "❌ Pipeline échoué! Vérifiez: Azure credentials, Docker Hub, DuckDNS token"
-            bat 'if exist robot-tests dir robot-tests'
+            bat '''
+                if exist robot-tests dir robot-tests
+                if exist kubeconfig (
+                    echo "=== Contenu du kubeconfig Jenkins ==="
+                    type kubeconfig | findstr "server:"
+                    echo "=== Test kubectl avec le kubeconfig Jenkins ==="
+                    set KUBECONFIG=%WORKSPACE%\\kubeconfig
+                    kubectl config view --minify
+                    kubectl auth can-i get pods --all-namespaces 2>nul || echo "Pas d'autorisation kubectl"
+                ) else (
+                    echo "ERREUR: Fichier kubeconfig non trouvé"
+                )
+                echo "=== Logs de débogage Azure ==="
+                az account show 2>nul || echo "Pas de connexion Azure"
+                az aks show --resource-group %RESOURCE_GROUP_NAME% --name %CLUSTER_NAME% --query "powerState" 2>nul || echo "Impossible de vérifier l'état AKS"
+            '''
         }
     }
 }
