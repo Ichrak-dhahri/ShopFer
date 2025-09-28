@@ -19,10 +19,35 @@ pipeline {
             }
         }
         
+        stage('Install Dependencies') {
+            steps {
+                bat 'call npm install'
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv(credentialsId: 'SQube-token', installationName: 'SonarQube') {
+                    script {
+                        def scannerHome = tool 'SonarScanner'
+                        bat "\"${scannerHome}\\bin\\sonar-scanner.bat\" -Dsonar.projectKey=E-commerce-App-main -Dsonar.sources=src"
+                    }
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        
         stage('Build & Test') {
             steps {
                 bat '''
-                    call npm install && call npm run build --prod
+                    call npm run build --prod
                     call npm run test -- --karma-config karma.conf.js --watch=false --code-coverage
                 '''
             }
@@ -68,25 +93,40 @@ pipeline {
             }
         }
         
-        stage('Cleanup & Docker Build') {
+        stage('Cleanup Process') {
             steps {
                 bat '''
                     for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":4200" ^| find "LISTENING"') do taskkill /f /pid %%a 2>nul
                     taskkill /f /im node.exe /im npm.cmd 2>nul || exit /b 0
                 '''
-                
+            }
+        }
+        
+        stage('Build Angular Application') {
+            steps {
+                bat 'call npm run build'
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
                 script {
                     bat '''
                         docker build -t %DOCKER_IMAGE_NAME%:%DOCKER_TAG% .
                         docker tag %DOCKER_IMAGE_NAME%:%DOCKER_TAG% %DOCKER_IMAGE_NAME%:latest
                     '''
-                    
-                    withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
-                        bat '''
-                            docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
-                            docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG% && docker push %DOCKER_IMAGE_NAME%:latest
-                        '''
-                    }
+                }
+            }
+        }
+        
+        stage('Push Docker Image to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-login', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_PASS')]) {
+                    bat '''
+                        docker login -u %DOCKER_HUB_USER% -p %DOCKER_HUB_PASS%
+                        docker push %DOCKER_IMAGE_NAME%:%DOCKER_TAG%
+                        docker push %DOCKER_IMAGE_NAME%:latest
+                    '''
                 }
             }
         }
